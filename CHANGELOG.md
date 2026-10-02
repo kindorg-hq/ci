@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.0](https://github.com/kindorg-hq/ci/compare/v4.0.0...v4.1.0) (2026-10-02)
+
+
+### Features
+
+* **#49:** recording in homelab-k8s is one tested module that verifies its result ([#53](https://github.com/kindorg-hq/ci/issues/53)) ([320c52e](https://github.com/kindorg-hq/ci/commit/320c52e98fde126d45250ac6637ae2f083f85375))
+* **#50:** Delivery is one module; ship and re-deliver only choose the Release ([#55](https://github.com/kindorg-hq/ci/issues/55)) ([6c9527a](https://github.com/kindorg-hq/ci/commit/6c9527ab9eb223e955701f0dbc2645d3d254a43d))
+
 ## [4.0.0](https://github.com/kindorg-hq/ci/compare/v3.1.0...v4.0.0) (2026-10-02)
 
 
