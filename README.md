@@ -53,13 +53,14 @@ jobs:
   release:
     if: github.event_name == 'push'
     uses: kindorg-hq/ci/.github/workflows/release.yml@v2
+    with: {auto-merge: true}
     secrets: inherit
 
   deliver:
     needs: [build, release]
     if: needs.release.outputs.released == 'true'
     uses: kindorg-hq/ci/.github/workflows/deliver.yml@v2
-    permissions: {contents: read, packages: write}
+    permissions: {contents: read, packages: write, pull-requests: write, deployments: write}
     with:
       app: pepic
       version: ${{ needs.release.outputs.version }}
@@ -82,8 +83,13 @@ Plus, in the service repo:
 
 ## Rules
 
-- **Only Releases are delivered.** A merge to main runs the Checks and updates
-  the release PR; nothing reaches the cluster until that PR is merged.
+- **A merge to main ships.** Main is always releasable. The merge builds the
+  Artifact; with `auto-merge: true` the release PR merges itself once green, and
+  the Release is delivered. The release PR is kept for the version and the
+  CHANGELOG, not as a gate.
+- **Delivery is visible on the PR.** Every PR in a Release gets the `delivered`
+  label and a comment (version, Release, GitOps PR); the release commit gets a
+  deployment to the `cluster` environment.
 - **Fix forward.** No rollback in the pipeline. Break-glass is a manual revert
   in homelab-k8s, described in its README.
 - **Images are pinned by digest** in homelab-k8s and labelled

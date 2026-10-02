@@ -22,7 +22,7 @@ The image built once, on merge to the main branch, tagged with its commit SHA an
 _Avoid_: build, image (an image can be rebuilt; an artifact is the one that was)
 
 **Release**:
-A version of a service, created by merging the release PR that release-please keeps open: a tag vX.Y.Z, a GitHub Release, a CHANGELOG entry. Only releases reach the cluster.
+A version of a service, created by merging the release PR that release-please keeps open: a tag vX.Y.Z, a GitHub Release, a CHANGELOG entry. Only releases reach the cluster. For services the release PR merges itself, so every merge to main becomes a Release; for this repo a human merges it.
 _Avoid_: deploy (that is Delivery), build
 
 **Delivery**:

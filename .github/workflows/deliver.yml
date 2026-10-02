@@ -9,7 +9,7 @@
 #     needs: [build, release]
 #     if: needs.release.outputs.released == 'true'
 #     uses: kindorg-hq/ci/.github/workflows/deliver.yml@v2
-#     permissions: {contents: read, packages: write}
+#     permissions: {contents: read, packages: write, pull-requests: write, deployments: write}
 #     with:
 #       app: pepic
 #       version: ${{ needs.release.outputs.version }}
@@ -37,6 +37,10 @@ on:
         type: string
         required: true
       release-url:
+        type: string
+        default: ""
+      environment-url:
+        description: Where the service answers, shown on the cluster deployment
         type: string
         default: ""
       images:
@@ -157,3 +161,31 @@ jobs:
           release-url: ${{ inputs.release-url }}
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+
+  report:
+    name: "Deliver: report on the PRs in ${{ inputs.version }}"
+    needs: gitops
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      deployments: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      - uses: ./.kindorg-ci/actions/report-delivery
+        with:
+          version: ${{ inputs.version }}
+          ref: ${{ inputs.ref }}
+          release-url: ${{ inputs.release-url }}
+          gitops-pr: ${{ needs.gitops.outputs.pr-url }}
+          environment-url: ${{ inputs.environment-url }}
+          token: ${{ github.token }}

@@ -1,0 +1,65 @@
+name: Report delivery
+description: >
+  Make a delivered release visible where the work happened. Every PR merged
+  since the previous release gets the "delivered" label and a comment naming
+  the version, the Release and the GitOps PR; the release commit gets a
+  GitHub Deployment to the "cluster" environment, so the repo shows what runs.
+inputs:
+  version:
+    description: Release version (e.g. 1.4.0)
+    required: true
+  ref:
+    description: The release tag
+    required: true
+  release-url:
+    default: ""
+  gitops-pr:
+    description: URL of the merged GitOps PR
+    default: ""
+  environment-url:
+    description: Where the service answers, shown on the deployment
+    default: ""
+  token:
+    description: Token with pull-requests:write and deployments:write
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        VERSION: ${{ inputs.version }}
+        REF: ${{ inputs.ref }}
+        RELEASE_URL: ${{ inputs.release-url }}
+        GITOPS_PR: ${{ inputs.gitops-pr }}
+        ENV_URL: ${{ inputs.environment-url }}
+      run: |
+        set -euo pipefail
+        repo=$GITHUB_REPOSITORY
+        sha=$(gh api "repos/$repo/commits/$REF" --jq .sha)
+
+        # the deployment: what runs in the cluster, on the repo's sidebar
+        id=$(printf '{"ref":"%s","environment":"cluster","auto_merge":false,"required_contexts":[],"description":"%s"}' "$sha" "$VERSION" \
+          | gh api "repos/$repo/deployments" --input - --jq .id)
+        gh api "repos/$repo/deployments/$id/statuses" -f state=success \
+          -f description="$VERSION recorded in GitOps" -f log_url="${GITOPS_PR:-$RELEASE_URL}" \
+          ${ENV_URL:+-f environment_url="$ENV_URL"} --silent
+
+        # the PRs in this release: commits since the previous release tag
+        prev=$(gh api "repos/$repo/releases?per_page=20" \
+          --jq "[.[] | select(.draft|not) | select(.tag_name != \"$REF\")][0].tag_name // empty")
+        if [ -n "$prev" ]; then
+          shas=$(gh api "repos/$repo/compare/$prev...$sha" --jq '.commits[].sha')
+        else
+          shas=$sha
+        fi
+        gh api "repos/$repo/labels" -f name=delivered -f color=0e8a16 \
+          -f description="Shipped to the cluster" --silent 2>/dev/null || true
+        body="Delivered in **$VERSION** to the cluster."
+        [ -n "$RELEASE_URL" ] && body+=$'\n'"- Release: $RELEASE_URL"
+        [ -n "$GITOPS_PR" ] && body+=$'\n'"- GitOps: $GITOPS_PR"
+        for n in $(for s in $shas; do gh api "repos/$repo/commits/$s/pulls" --jq '.[].number'; done | sort -un); do
+          gh api "repos/$repo/issues/$n/labels" -f 'labels[]=delivered' --silent
+          gh api "repos/$repo/issues/$n/comments" -f body="$body" --silent
+          echo "- #$n" >> "$GITHUB_STEP_SUMMARY"
+        done

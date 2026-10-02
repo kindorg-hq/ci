@@ -23,9 +23,13 @@ Shared conventions for every repo that uses this golden path. Terms
 
 ## Releases and the cluster
 
-- A merge to the main branch builds the Artifact; it does not deploy.
-- **The human merges release PRs** ("release x.y.z", opened by kindorg-ci).
-  That merge is the decision to ship; delivery to the cluster follows from it.
+- **A merge to main ships.** Main is always releasable: the merge builds the
+  Artifact, the release PR ("release x.y.z", by kindorg-ci) merges itself once
+  green, and the Release is delivered. Merge only what may run in the cluster.
+- After delivery every PR in the Release carries the `delivered` label and a
+  comment with the version; the `cluster` deployment shows what runs.
+- This repo is the exception: here the human merges the release PR, since it
+  moves `v2` for every service at once.
 - Production problems are fixed forward: a `fix(#N)` PR, then its release.
   Break-glass (a manual revert in homelab-k8s) is the human's call.
 - Re-delivering the latest release after a failed delivery:
