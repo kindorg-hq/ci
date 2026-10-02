@@ -1,0 +1,12 @@
+# What Deliver's dry runs record in (actions/deliver, on a git copy of
+# fixtures/gitops): Ship's (hello-ship), re-delivery's (hello-redeliver) and
+# the module's own in self-test. Recorded at 1.0.0, so a dry run shows an
+# upgrade and a lower version is refused.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+labels:
+- includeTemplates: true
+  pairs:
+    app.kubernetes.io/version: 1.0.0

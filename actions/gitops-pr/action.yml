@@ -11,6 +11,8 @@ description: >
   require the checks or auto-merge — this action waits for them and merges
   itself. In a dry run the token can only read, the checkout keeps no
   credentials and nothing is pushed: it prints the diff it would record.
+  A dry run can also record in a GitOps checkout it is given (`checkout`,
+  e.g. a git copy of fixtures/gitops): then no token and no clone either.
 inputs:
   app:
     description: Application directory under manifests/ (e.g. pepic)
@@ -40,11 +42,11 @@ inputs:
     description: Where the service answers, for kindorg.dev/environment-url (optional)
     default: ""
   app-id:
-    description: GitHub App id (kindorg-ci)
-    required: true
+    description: GitHub App id (kindorg-ci); not needed with `checkout`
+    default: ""
   private-key:
-    description: GitHub App private key
-    required: true
+    description: GitHub App private key; not needed with `checkout`
+    default: ""
   gitops-repo:
     description: owner/name of the GitOps repo
     default: kindorg-hq/homelab-k8s
@@ -56,6 +58,12 @@ inputs:
       "true": record on a read-only checkout and print the diff; no branch,
       no PR, nothing pushed (self-test)
     default: "false"
+  checkout:
+    description: >
+      Dry run only: a git checkout of a GitOps tree to record in instead of
+      cloning gitops-repo (no token, no clone); it must be clean and is left
+      changed
+    default: ""
 outputs:
   changed:
     description: '"true" when the Release was not recorded yet (the checkout changed), "false" when it already was'
@@ -73,13 +81,19 @@ runs:
       shell: bash
       env:
         REPO: ${{ inputs.gitops-repo }}
+        CHECKOUT: ${{ inputs.checkout }}
+        DRY_RUN: ${{ inputs.dry-run }}
       run: |
+        if [ -n "$CHECKOUT" ] && [ "$DRY_RUN" != true ]; then
+          echo "::error::gitops-pr: a given checkout is for a dry run only; a delivery records in a fresh clone of $REPO"; exit 1; fi
+        echo "dir=${CHECKOUT:-.gitops}" >> "$GITHUB_OUTPUT"
         echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
         echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
 
     # a token for the GitOps repo only, valid for an hour; in a dry run it
     # can only read
     - id: token
+      if: inputs.checkout == ''
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
         app-id: ${{ inputs.app-id }}
@@ -88,7 +102,8 @@ runs:
         repositories: ${{ steps.target.outputs.name }}
         permission-contents: ${{ inputs.dry-run == 'true' && 'read' || '' }}
 
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - if: inputs.checkout == ''
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ inputs.gitops-repo }}
         token: ${{ steps.token.outputs.token }}
@@ -108,21 +123,23 @@ runs:
         SOURCE_SHA: ${{ inputs.source-sha }}
         ENVIRONMENT_URL: ${{ inputs.environment-url }}
         DRY_RUN: ${{ inputs.dry-run }}
+        DIR: ${{ steps.target.outputs.dir }}
+        WHERE: ${{ inputs.checkout && format('the GitOps checkout {0}', inputs.checkout) || inputs.gitops-repo }}
       run: |
         set -euo pipefail
-        diff=$(bash "$GITHUB_ACTION_PATH/../record/record.sh" .gitops "$APP")
+        diff=$(bash "$GITHUB_ACTION_PATH/../record/record.sh" "$DIR" "$APP")
         changed=false; [ -z "$diff" ] || changed=true
         eof="EOF_$(openssl rand -hex 8)"
         { echo "changed=$changed"; echo "diff<<$eof"; [ -z "$diff" ] || printf '%s\n' "$diff"; echo "$eof"; } >> "$GITHUB_OUTPUT"
         [ -z "$diff" ] || printf '%s\n' "$diff"
         [ "$DRY_RUN" = true ] || exit 0
-        at=$(git -C .gitops rev-parse --short HEAD)
+        at=$(git -C "$DIR" rev-parse --short HEAD)
         notes=${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}
         if [ "$changed" = true ]; then
-          printf 'Dry run: %s %s would be recorded in homelab-k8s (at `%s`) with this diff; nothing pushed.\n\n```diff\n%s\n```\n' \
-            "$APP" "$VERSION" "$at" "$diff" >> "$notes"
+          printf 'Dry run: %s %s would be recorded in %s (at `%s`) with this diff; nothing pushed.\n\n```diff\n%s\n```\n' \
+            "$APP" "$VERSION" "$WHERE" "$at" "$diff" >> "$notes"
         else
-          echo "Dry run: homelab-k8s (at \`${at}\`) already records ${APP} ${VERSION}: no diff, nothing pushed." >> "$notes"
+          echo "Dry run: ${WHERE} (at \`${at}\`) already records ${APP} ${VERSION}: no diff, nothing pushed." >> "$notes"
         fi
 
     - id: pr

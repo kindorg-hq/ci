@@ -202,9 +202,10 @@ jobs:
     # linux/amd64 in an arm64 index) → `ship / Deliver`: the Release cut as a
     # dry run on this repo's history (version and notes in the summary, no
     # tag), the image promoted to a throw-away tag without rebuilding (digest
-    # checked against Accept's), re-scanned, the report on the PRs as a dry
-    # run; no GitOps PR. Its own image name, so no other job's image is
-    # pushed under it.
+    # checked against Accept's), re-scanned, recorded in a copy of
+    # fixtures/gitops (app hello-dry-run: the diff in the summary), the report
+    # on the PRs as a dry run; homelab-k8s untouched. Its own image name, so
+    # no other job's image is pushed under it.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/ship.yml
     permissions:
@@ -213,7 +214,7 @@ jobs:
       pull-requests: write
       deployments: write
     with:
-      app: hello
+      app: hello-dry-run
       images: '[{"name": "hello-ship", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
       url: https://hello.example
       ci-ref: ${{ github.event.pull_request.head.sha }}
@@ -260,8 +261,9 @@ jobs:
   redeliver:
     # Re-delivery as a service calls it, on the fixture: one box,
     # `redeliver / Deliver` — the latest Release of this repo found, its
-    # commit's Artifact (above) promoted to a throw-away tag and re-scanned,
-    # the report as a dry run on that Release's PRs; no GitOps PR.
+    # commit's Artifact (above) promoted to a throw-away tag, re-scanned and
+    # recorded in a copy of fixtures/gitops, the report as a dry run on that
+    # Release's PRs; homelab-k8s untouched.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: redeliver-artifact
     uses: ./.github/workflows/redeliver.yml
@@ -271,45 +273,124 @@ jobs:
       pull-requests: write
       deployments: write
     with:
-      app: hello
+      app: hello-dry-run
       images: '[{"name": "hello-redeliver"}]'
       url: https://hello.example
       ci-ref: ${{ github.event.pull_request.head.sha }}
       dry-run: true
 
-  same-deliver:
-    # Ship's Deliver and re-delivery's are two files kept step for step the
-    # same from promote to report (one job each: a shared reusable workflow
-    # would nest the names a level deeper). They differ only in getting the
-    # Release and in the check after promote; anything else that drifts fails.
-    name: "Accept: Ship and re-deliver deliver the same way"
+  deliver:
+    # Delivery is one module, actions/deliver; Ship and re-delivery only
+    # choose the Release. Called here directly, as a dry run, on the Artifact
+    # Ship's Build pushed (hello-ship:<sha>): no Artifact given → found by
+    # commit, promoted, re-scanned, recorded in a copy of fixtures/gitops
+    # (hello-dry-run, at 1.0.0) with a real diff, reported as a dry run; then
+    # the same list given (as Ship gives it) with a lower version → refused,
+    # "failed at record"; then an image with no Artifact for the commit →
+    # "failed at find". The summary of the refused one is this job's.
+    name: "Deliver: one module delivers a Release and names where it stops"
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: ship
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    env:
+      KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
+      JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # where the workflows put it: the module's parts are .kindorg-ci/actions
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: .kindorg-ci
           persist-credentials: false
-      - env:
-          YQ: mikefarah/yq:4.47.2@sha256:76def1f56f456ecc1c3173ea275218ee17139bc2018c5a07887b15afd88ec03e
+
+      - id: found
+        name: "No Artifact given: found by commit, delivered (dry run)"
+        uses: ./.kindorg-ci/actions/deliver
+        with:
+          version: 1.1.0
+          tag: v1.1.0
+          sha: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          images: '[{"name": "hello-ship"}]'
+          app: hello-dry-run
+          environment-url: https://hello.example
+          dry-run: "true"
+          token: ${{ github.token }}
+      - name: Delivered, recorded in the fixture with the pins, nothing failed
+        env:
+          OUTCOME: ${{ steps.found.outputs.outcome }}
+          FAILED_AT: ${{ steps.found.outputs.failed-at }}
+          IMAGES: ${{ steps.found.outputs.images }}
+          DIFF: ${{ steps.found.outputs.diff }}
+          GITOPS_PR: ${{ steps.found.outputs.gitops-pr }}
         run: |
           set -euo pipefail
-          yq() { docker run --rm -i -v "$PWD:/repo:ro" -w /repo "$YQ" "$@"; }
-          # the Deliver job (but for Ship's needs) and its steps promote (but
-          # for which Artifact list it promotes), rescan, gitops, report; JSON
-          # drops the comments
-          q='.jobs.deliver | del(.needs)
-             | .steps |= map(select(.id == "promote" or .id == "rescan" or .id == "gitops" or .id == "report"))
-             | del(.steps[] | select(.id == "promote") | .with.images)'
-          yq -o json "$q" .github/workflows/ship.yml > "$RUNNER_TEMP/ship.json"
-          yq -o json "$q" .github/workflows/redeliver.yml > "$RUNNER_TEMP/redeliver.json"
-          [ "$(yq -o json '.steps | map(.id) | join(" ")' < "$RUNNER_TEMP/ship.json")" = '"promote rescan gitops report"' ] || {
-            echo "::error::ship.yml's Deliver has no promote … report steps"; exit 1; }
-          diff -u "$RUNNER_TEMP/ship.json" "$RUNNER_TEMP/redeliver.json" || {
-            echo "::error::ship.yml's and redeliver.yml's Deliver jobs drifted apart (above); change both"; exit 1; }
-          echo "Deliver job and steps promote → report: the same in ship.yml and redeliver.yml"
+          jq() { docker run --rm -i "$JQ" "$@"; }
+          echo "$IMAGES"; echo "$DIFF"
+          [ "$OUTCOME" = dry-run ] && [ -z "$FAILED_AT" ] || { echo "::error::want outcome dry-run, no failed-at; got '$OUTCOME' '$FAILED_AT'"; exit 1; }
+          [ -z "$GITOPS_PR" ] || { echo "::error::a dry run opened $GITOPS_PR"; exit 1; }
+          ref=$(echo "$IMAGES" | jq -r '.[] | select(.name == "hello-ship") | "\(.image)@\(.digest)"')
+          [[ "$ref" == *@sha256:* ]] || { echo "::error::no hello-ship digest in $IMAGES"; exit 1; }
+          for want in "${ref#*@}" "app.kubernetes.io/version: 1.1.0" "kindorg.dev/source-sha: $GITHUB_SHA"; do
+            [[ "$DIFF" == *"$want"* ]] || { echo "::error::the recorded diff lacks '$want'"; exit 1; }
+          done
+          echo "found by commit, promoted, re-scanned, recorded (pin, version, Application) as a dry run: ok"
+
+      - id: downgrade
+        name: "The Artifact given, a lower version: refused at record"
+        continue-on-error: true
+        uses: ./.kindorg-ci/actions/deliver
+        with:
+          version: 0.9.0
+          tag: v0.9.0
+          sha: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          artifact: ${{ steps.found.outputs.images }}
+          app: hello-dry-run
+          dry-run: "true"
+          token: ${{ github.token }}
+      - name: Summary of the refused delivery
+        if: always()
+        uses: ./.kindorg-ci/actions/delivery-summary
+        with:
+          kind: Deliver (self-test)
+          outcome: ${{ steps.downgrade.outputs.outcome }}
+          dry-run: "true"
+          version: 0.9.0
+          sha: ${{ github.sha }}
+          images: ${{ steps.downgrade.outputs.images }}
+          failed: ${{ steps.downgrade.outputs.failed-at }}
+
+      - id: missing
+        name: "No Artifact for the commit: fails at find"
+        continue-on-error: true
+        uses: ./.kindorg-ci/actions/deliver
+        with:
+          version: 1.1.0
+          tag: v1.1.0
+          sha: ${{ github.sha }}
+          images: '[{"name": "hello-no-such-image"}]'
+          app: hello-dry-run
+          dry-run: "true"
+          token: ${{ github.token }}
+
+      - name: Each failure named, the outputs there though the module failed
+        env:
+          DOWN: ${{ steps.downgrade.outcome }} ${{ steps.downgrade.outputs.outcome }} ${{ steps.downgrade.outputs.failed-at }}
+          MISS: ${{ steps.missing.outcome }} ${{ steps.missing.outputs.outcome }} ${{ steps.missing.outputs.failed-at }}
+        run: |
+          set -euo pipefail
+          check() {
+            if [ "$2" = "$3" ]; then echo "ok   $1: $3"; else echo "::error::$1: want '$2', got '$3'"; exit 1; fi; }
+          check "lower version" "failure failed record in the fixture GitOps tree" "$DOWN"
+          check "no Artifact" "failure failed find the release commit's Artifact" "$MISS"
 
   image-list:
     # The list form the workflows use — one job per Stage, images looped

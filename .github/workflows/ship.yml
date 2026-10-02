@@ -29,7 +29,8 @@
 #            (actions/artifact/artifact.sh), which every step after only reads.
 #   Accept   Trivy over the pushed images (CRITICAL with a fix fails).
 #   Deliver  cut release (git-cliff: only a Releasable change tags this very
-#            commit vX.Y.Z; otherwise the run ends here, green), promote
+#            commit vX.Y.Z; otherwise the run ends here, green), then
+#            Delivery, one step (actions/deliver): promote
 #            (:<commit-sha> → :X.Y.Z, same digest, checked against what Accept
 #            scanned), re-scan, record in homelab-k8s (GitOps PR: no
 #            downgrade, pinned by digest, the Release on the Application,
@@ -42,13 +43,13 @@
 # concurrency group, shared with re-delivery), and the GitOps PR refuses a
 # version lower than the recorded one.
 #
-# Re-delivery (redeliver.yml) runs this Deliver job too, as its own file: the
-# same steps from promote to report (self-test compares them), with "find the
-# latest Release" in place of "cut release" and, nothing being built there,
-# the release commit's Artifact list found in ghcr in place of Build's. The steps
-# are this repo's actions, the summary included (actions/delivery-summary). Those actions write their notes
-# to the file KINDORG_CI_NOTES names, not to their own step summaries, so the
-# run has one summary.
+# Re-delivery (redeliver.yml) runs the same Delivery (actions/deliver), with
+# "find the latest Release" in place of "cut release" and, nothing being
+# built there, the release commit's Artifact list found in ghcr in place of
+# Build's. So the Deliver job is three steps: get the Release, deliver it,
+# the summary (actions/delivery-summary, naming the part that failed). The
+# actions write their notes to the file KINDORG_CI_NOTES names, not to their
+# own step summaries, so the run has one summary.
 #
 # Runs as the kindorg-ci GitHub App to tag the Release and for the GitOps PR:
 # vars.KINDORG_CI_APP_ID (org variable) and secrets.KINDORG_CI_APP_KEY.
@@ -83,7 +84,8 @@ on:
       dry-run:
         description: >
           Self-test: cut the Release as a dry run, promote to a throw-away tag,
-          report as a dry run; no tag, no GitOps PR, nothing written on PRs
+          record in a copy of fixtures/gitops (app hello-dry-run), report as a
+          dry run; no tag, homelab-k8s untouched, nothing written on PRs
         type: boolean
         default: false
     secrets:
@@ -183,8 +185,6 @@ jobs:
       deployments: write
     env:
       KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
-      # what a dry run promotes to instead of the version
-      DRY_RUN_TAG: 0.0.0-dry-run-${{ github.event.pull_request.number || github.run_id }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -200,105 +200,37 @@ jobs:
           ref: ${{ inputs.ci-ref }}
           path: .kindorg-ci
           persist-credentials: false
-      # the App, not GITHUB_TOKEN: its tag and Release may trigger workflows
-      - id: token
-        name: Token of the kindorg-ci App
-        if: ${{ !inputs.dry-run }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ vars.KINDORG_CI_APP_ID }}
-          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+      # Get the Release: a Releasable change tags this very commit (as the
+      # kindorg-ci App: its tag and Release may trigger workflows); none ends
+      # the run here, green. A dry run computes the would-be one.
       - id: cut
         name: Cut release (only on a Releasable change)
         uses: ./.kindorg-ci/actions/cut-release
         with:
           dry-run: ${{ inputs.dry-run }}
-          token: ${{ steps.token.outputs.token }}
-      # The Release the steps below deliver, as redeliver.yml's "Find the
-      # latest Release" gives it: deliver, version, tag, url, sha (the release
-      # commit), ref (what the report looks at). Only a Releasable change
-      # delivers; in a dry run, a would-be Release.
-      - id: release
-        name: The Release to deliver
-        env:
-          RELEASED: ${{ steps.cut.outputs.released }}
-          VERSION: ${{ steps.cut.outputs.version }}
-          TAG: ${{ steps.cut.outputs.tag }}
-          URL: ${{ steps.cut.outputs.url }}
-          DRY_RUN: ${{ inputs.dry-run }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          deliver=false
-          if [ "$RELEASED" = true ] || { [ "$DRY_RUN" = true ] && [ -n "$VERSION" ]; }; then deliver=true; fi
-          # a dry run looks at the PR's own commits; the merge commit has no PR
-          ref=$TAG
-          [ "$DRY_RUN" != true ] || ref=${PR_HEAD:-$GITHUB_SHA}
-          { echo "deliver=$deliver"; echo "version=$VERSION"; echo "tag=$TAG"; echo "url=$URL"
-            echo "sha=$GITHUB_SHA"; echo "ref=$ref"; } >> "$GITHUB_OUTPUT"
-
-      # From here to the summary, ship.yml and redeliver.yml run the same
-      # steps (self-test compares them), but for what is promoted and the
-      # check after promote. Promoted: the Artifact list Build pushed and
-      # Accept scanned.
-      - id: promote
-        name: Promote :<commit-sha> to the version, same digest
-        if: steps.release.outputs.deliver == 'true'
-        uses: ./.kindorg-ci/actions/promote-image
-        with:
-          images: ${{ needs.build.outputs.images }}
-          to-tag: ${{ inputs.dry-run && env.DRY_RUN_TAG || steps.release.outputs.version }}
-          token: ${{ github.token }}
-      # build once, promote: what is delivered is what Accept scanned
-      - id: same
-        name: The promoted images are the accepted ones
-        if: steps.promote.outcome == 'success'
-        env:
-          ACCEPTED: ${{ needs.build.outputs.images }}
-          PROMOTED: ${{ steps.promote.outputs.images }}
-        run: |
-          # two Artifact lists, compared as they are
-          [ "$ACCEPTED" = "$PROMOTED" ] || {
-            echo "::error::promoted images differ from the accepted ones: $ACCEPTED → $PROMOTED"; exit 1; }
-          echo "$PROMOTED"
-      - id: rescan
-        name: Re-scan the promoted images
-        if: steps.same.outcome == 'success'
-        uses: ./.kindorg-ci/actions/scan-image
-        with:
-          images: ${{ steps.promote.outputs.images }}
-          severity: ${{ inputs.trivy-severity }}
-          token: ${{ github.token }}
-      # an already recorded version (a re-delivery): "Manifests already at",
-      # no PR, no pr-url
-      - id: gitops
-        name: Record in homelab-k8s (GitOps PR)
-        if: ${{ steps.rescan.outcome == 'success' && !inputs.dry-run }}
-        uses: ./.kindorg-ci/actions/gitops-pr
-        with:
-          app: ${{ inputs.app }}
-          version: ${{ steps.release.outputs.version }}
-          images: ${{ steps.promote.outputs.images }}
-          release-url: ${{ steps.release.outputs.url }}
-          source-sha: ${{ steps.release.outputs.sha }}
-          environment-url: ${{ inputs.url }}
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
-      # Also when nothing new was recorded: a delivery that died after the
-      # GitOps PR gets its labels, comments and deployment here. With no
-      # pr-url it leaves existing comments and the deployment as they are, so
-      # "running" stays running.
-      - id: report
-        name: Report on the PRs in the Release
-        if: steps.gitops.outcome == 'success' || (inputs.dry-run && steps.rescan.outcome == 'success')
-        uses: ./.kindorg-ci/actions/report-delivery
+      # Delivery, all of it (actions/deliver, as re-delivery runs it): the
+      # Artifact Build pushed and Accept scanned, promoted, re-scanned,
+      # recorded, reported. A dry run's report looks at the PR's own commits
+      # (the merge commit has no PR).
+      - id: deliver
+        name: Deliver the Release (promote, re-scan, record in homelab-k8s, report)
+        if: steps.cut.outputs.released == 'true' || (inputs.dry-run && steps.cut.outputs.version != '')
+        uses: ./.kindorg-ci/actions/deliver
         with:
-          dry-run: ${{ inputs.dry-run }}
-          version: ${{ steps.release.outputs.version }}
-          ref: ${{ steps.release.outputs.ref }}
-          release-url: ${{ steps.release.outputs.url }}
-          gitops-pr: ${{ steps.gitops.outputs.pr-url }}
+          version: ${{ steps.cut.outputs.version }}
+          tag: ${{ steps.cut.outputs.tag }}
+          sha: ${{ github.sha }}
+          release-url: ${{ steps.cut.outputs.url }}
+          ref: ${{ inputs.dry-run && (github.event.pull_request.head.sha || github.sha) || '' }}
+          artifact: ${{ needs.build.outputs.images }}
+          app: ${{ inputs.app }}
           environment-url: ${{ inputs.url }}
+          trivy-severity: ${{ inputs.trivy-severity }}
+          dry-run: ${{ inputs.dry-run }}
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
           token: ${{ github.token }}
 
       - name: Summary
@@ -306,22 +238,16 @@ jobs:
         uses: ./.kindorg-ci/actions/delivery-summary
         with:
           kind: Ship
-          deliver: ${{ steps.release.outputs.deliver == 'true' }}
+          outcome: ${{ steps.deliver.outputs.outcome }}
           dry-run: ${{ inputs.dry-run }}
           version: ${{ steps.cut.outputs.version }}
           release-url: ${{ steps.cut.outputs.url }}
           sha: ${{ github.sha }}
-          images: ${{ steps.promote.outputs.images || needs.build.outputs.images }}
-          gitops-pr: ${{ steps.gitops.outputs.pr-url }}
+          images: ${{ steps.deliver.outputs.images || needs.build.outputs.images }}
+          gitops-pr: ${{ steps.deliver.outputs.gitops-pr }}
           notes: ${{ needs.build.outputs.notes }}
           failed: >-
-            ${{ steps.token.outcome == 'failure' && 'the App token' ||
-            steps.cut.outcome == 'failure' && 'cut release' ||
-            steps.release.outcome == 'failure' && 'the Release to deliver' ||
-            steps.promote.outcome == 'failure' && 'promote' ||
-            steps.same.outcome == 'failure' && 'the promoted images are the accepted ones' ||
-            steps.rescan.outcome == 'failure' && 're-scan' ||
-            steps.gitops.outcome == 'failure' && 'record in homelab-k8s' ||
-            steps.report.outcome == 'failure' && 'report on the PRs' ||
+            ${{ steps.cut.outcome == 'failure' && 'cut release' ||
+            steps.deliver.outputs.failed-at ||
             job.status == 'cancelled' && 'a cancel' ||
             job.status == 'failure' && 'set-up' || '' }}
