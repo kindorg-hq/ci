@@ -70,6 +70,10 @@ jobs:
       matrix:
         image: ${{ fromJSON(inputs.images) }}
     steps:
+      # egress audit: logs every outbound connection of this job
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
@@ -98,13 +102,17 @@ jobs:
   gitops:
     name: Record ${{ inputs.app }} ${{ inputs.version }} in homelab-k8s
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
     outputs:
       pr-url: ${{ steps.pr.outputs.pr-url }}
     steps:
+      # egress audit: logs every outbound connection of this job
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kindorg-hq/ci
@@ -124,6 +132,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          jq() { docker run --rm -i ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486 "$@"; }
           out='[]'
           for name in $(echo "$IMAGES" | jq -r '.[].name'); do
             digest=$(docker buildx imagetools inspect "ghcr.io/${OWNER,,}/${name}:${VERSION}" \

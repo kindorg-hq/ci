@@ -32,7 +32,8 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    # API-only: a single-CPU unprivileged container is enough
+    runs-on: ubuntu-slim
     outputs:
       released: ${{ steps.rp.outputs.release_created || 'false' }}
       version: ${{ steps.rp.outputs.version }}

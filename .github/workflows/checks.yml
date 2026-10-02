@@ -37,7 +37,8 @@ jobs:
   pr-title:
     name: PR title is a Conventional Commit
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    # API-only: a single-CPU unprivileged container is enough
+    runs-on: ubuntu-slim
     steps:
       # squash merges make the title the commit — and release-please reads commits
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
@@ -46,8 +47,12 @@ jobs:
 
   secrets:
     name: No secrets in the change
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
+      # egress audit: logs every outbound connection of this job
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -68,7 +73,7 @@ jobs:
     name: No vulnerable dependencies added
     # needs GitHub Advanced Security on private repos, free on public ones
     if: github.event_name == 'pull_request' && !github.event.repository.private
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
@@ -83,6 +88,10 @@ jobs:
       matrix:
         image: ${{ fromJSON(inputs.images) }}
     steps:
+      # egress audit: logs every outbound connection of this job
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
