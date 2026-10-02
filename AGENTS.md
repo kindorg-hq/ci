@@ -4,6 +4,8 @@ Shared conventions for every repo on the golden path (v3). Terms (Stage,
 Artifact, Release, Releasable change, Delivery, Production, Work item, Fix
 forward, Break-glass): [CONTEXT.md](CONTEXT.md). How the pipeline works:
 [README.md](README.md).
+Why the pipeline is shaped this way: [PRINCIPLES.md](PRINCIPLES.md) — read it
+before changing the golden path or proposing a shortcut.
 
 ## A change, end to end
 
