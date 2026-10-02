@@ -98,6 +98,27 @@ jobs:
       images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
       ci-ref: ${{ github.event.pull_request.head.sha }}
 
+  ship:
+    # v4 Ship as a service calls it, on the fixture: `ship / Build` →
+    # `ship / Accept` → `ship / Deliver`, the Release cut as a dry run on this
+    # repo's history, the image promoted to a throw-away tag (digest checked
+    # against Accept's), re-scanned, the report as a dry run; no GitOps PR.
+    # Its own image name, so the deliver-path job's hello:<sha> is not pushed
+    # under it.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/ship.yml
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      deployments: write
+    with:
+      app: hello
+      images: '[{"name": "hello-ship", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
+      url: https://hello.example
+      ci-ref: ${{ github.event.pull_request.head.sha }}
+      dry-run: true
+
   deliver-path:
     # The path a service's artifact takes after a merge: Build runs the
     # fixture's test stage and pushes the image tagged with the commit, Accept

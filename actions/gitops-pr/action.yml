@@ -201,4 +201,4 @@ runs:
         echo "$runs" | jq -r '.[] | "\(.name): \(.conclusion)"'
         gh api -X PUT "repos/${REPO}/pulls/${n}/merge" -f merge_method=squash -f sha="$sha" --silent
         gh api -X DELETE "repos/${REPO}/git/refs/heads/${branch}" --silent || true
-        echo "Merged $url — ArgoCD takes it from here" >> "$GITHUB_STEP_SUMMARY"
+        echo "Merged $url — ArgoCD takes it from here" >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"

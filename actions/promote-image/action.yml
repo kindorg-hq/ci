@@ -89,7 +89,7 @@ runs:
           if [ "$built" != "$promoted" ]; then
             echo "::error::promote-image: ${name}: promotion changed the digest: $built → $promoted"; exit 1
           fi
-          echo "${image}:${TO} → ${built} (built for ${FROM})" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "${image}:${TO} → ${built} (built for ${FROM})" | tee -a "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
           out+=("$(printf '%s\t%s\t%s' "$name" "$image" "$built")")
         done 3<<< "$list"
 
