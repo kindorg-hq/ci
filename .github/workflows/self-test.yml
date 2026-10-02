@@ -84,6 +84,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      version: ${{ steps.cut.outputs.version }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -104,7 +106,8 @@ jobs:
         with:
           ref: ${{ steps.build.outputs.ref }}
           token: ${{ github.token }}
-      - uses: ./actions/cut-release
+      - id: cut
+        uses: ./actions/cut-release
         with:
           dry-run: "true"
       - uses: ./actions/promote-image
@@ -112,4 +115,35 @@ jobs:
           image: ghcr.io/${{ github.repository_owner }}/hello
           from-tag: ${{ github.sha }}
           to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-promoted
+          token: ${{ github.token }}
+
+  report-dry-run:
+    # Deliver's last job, as a dry run on this repo: the PRs the would-be
+    # Release of this PR would label and comment on, and the production
+    # deployment it would create — in the summary, nothing written. Same
+    # runner as in deliver.yml.
+    name: "Deliver: report on the PRs (dry run)"
+    needs: deliver-path
+    if: needs.deliver-path.outputs.version != ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      deployments: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/report-delivery
+        with:
+          dry-run: "true"
+          version: ${{ needs.deliver-path.outputs.version }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          release-url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.deliver-path.outputs.version }}
+          gitops-pr: https://github.com/kindorg-hq/homelab-k8s/pull/0
+          environment-url: https://hello.example
           token: ${{ github.token }}

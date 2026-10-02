@@ -30,7 +30,7 @@ A commit whose type is `feat`, `fix` or `perf`, or that is breaking. Only these 
 _Avoid_: release-worthy, user-facing change
 
 **Delivery**:
-Getting a Release into Production without building anything: the Artifact of the release commit is promoted (the version tag added to the same digest), re-scanned, and recorded in homelab-k8s by a pull request — pinned by digest, labelled with the version. A Release is **recorded** when that PR merges, and **running** when ArgoCD reports it synced and healthy; only running counts as delivered. The pipeline marks every PR of the Release `released` and comments "recorded"; ArgoCD turns that comment on the release commit's PR into "running" (or "degraded") and sets the `production` deployment, which is the source of truth.
+Getting a Release into Production without building anything: the Artifact of the release commit is promoted (the version tag added to the same digest), re-scanned, and recorded in homelab-k8s by a pull request — pinned by digest, labelled with the version. A Release is **recorded** when that PR merges, and **running** when ArgoCD reports it synced and healthy; only running counts as delivered. The pipeline marks every PR of the Release (the PRs of its commits since the previous Release) `released` and comments "recorded" once on each; ArgoCD turns that comment on the release commit's PR into "running" (or "degraded") and sets the `production` deployment, which is the source of truth.
 _Avoid_: deploy job, push to prod
 
 **Production**:

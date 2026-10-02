@@ -40,7 +40,7 @@ on:
         type: string
         default: ""
       environment-url:
-        description: Where the service answers, shown on the cluster deployment
+        description: Where the service answers, shown on the production deployment
         type: string
         default: ""
       images:
@@ -162,10 +162,14 @@ jobs:
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
 
+  # Release recorded: every PR of it gets the `released` label and a
+  # "recorded" comment, the release commit a `production` deployment; ArgoCD
+  # takes both from there (running / degraded)
   report:
     name: "Deliver: report on the PRs in ${{ inputs.version }}"
     needs: gitops
-    runs-on: ubuntu-24.04
+    # API-only
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read

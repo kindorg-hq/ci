@@ -33,6 +33,23 @@ Shared conventions for every repo that uses this golden path. Terms
   `gh workflow run pipeline` in the service repo. It promotes the existing
   Artifact; it never rebuilds.
 
+## Reading a PR's state
+
+Where a merged PR is, from its page or `gh`:
+
+- no `released` label — merged, not in a Release yet (only a `feat`, `fix`,
+  `perf` or breaking change cuts one; the rest ship with the next);
+- `released` label — in a Release; the comment names it:
+  - "vX.Y.Z recorded" — in homelab-k8s, not yet running;
+  - "running" / "degraded" — ArgoCD's word, on the release commit's PR.
+- The source of truth is the release commit's `production` deployment:
+  `in_progress` = recorded, `success` = running, `failure` = degraded.
+
+  ```sh
+  gh api "repos/OWNER/REPO/deployments?environment=production&ref=SHA" --jq '.[0].id'
+  gh api "repos/OWNER/REPO/deployments/ID/statuses" --jq '.[0].state'
+  ```
+
 ## Changing this repo (kindorg-hq/ci)
 
 Services follow a major tag (`@v2`, frozen at 2.1.0; v3 is next), so a
