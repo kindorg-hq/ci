@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.0.0](https://github.com/kindorg-hq/ci/compare/v2.1.0...v3.0.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **#15:** services move to golden-path.yml@v3 and drop release-please; build-image builds the Dockerfile's test stage, so a failing one fails Build.
+
+### Features
+
+* **#11:** a merge to main ships; delivered PRs say so ([#12](https://github.com/kindorg-hq/ci/issues/12)) ([f941c7f](https://github.com/kindorg-hq/ci/commit/f941c7f19d774091580bde45dfa1df52a36a589c))
+* **#15:** golden path v3 — one entry workflow, a merge is a Release ([#22](https://github.com/kindorg-hq/ci/issues/22)) ([4a3e086](https://github.com/kindorg-hq/ci/commit/4a3e086e7cf7c7aefc7572d7cf4afedd0d9c18d1)), closes [#15](https://github.com/kindorg-hq/ci/issues/15)
+* **#16:** deliveries never overtake each other ([#23](https://github.com/kindorg-hq/ci/issues/23)) ([07a2843](https://github.com/kindorg-hq/ci/commit/07a28432596e12d257f2758d059935cddd108e78))
+* **#17:** a recorded Release shows on its PRs and the production deployment ([#24](https://github.com/kindorg-hq/ci/issues/24)) ([b91c1aa](https://github.com/kindorg-hq/ci/commit/b91c1aa355cb4b9bca5a6820011da5b5a88d91ad))
+
+
+### Bug Fixes
+
+* **#14:** release this repo only after a green self-test; freeze v2 ([#20](https://github.com/kindorg-hq/ci/issues/20)) ([d07909b](https://github.com/kindorg-hq/ci/commit/d07909b001ebcb0595e3b4cedf93916921e3d4c9))
+* **#18:** v3 workflows default to v3 actions; drop the v2 checks alias ([#26](https://github.com/kindorg-hq/ci/issues/26)) ([aa88b21](https://github.com/kindorg-hq/ci/commit/aa88b21c22999f2fa162527c7f1e462b170e4792))
+
 ## [2.1.0](https://github.com/kindorg-hq/ci/compare/v2.0.0...v2.1.0) (2026-10-02)
 
 
