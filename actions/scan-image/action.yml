@@ -1,0 +1,35 @@
+name: Scan image
+description: >
+  Trivy over a built image: operating-system packages and application
+  dependencies. Fails on CRITICAL by default — HIGH on old base images would
+  drown the signal. Runs Trivy as a pinned container, not a third-party action.
+inputs:
+  ref:
+    description: Image reference to scan (local tag or name@digest)
+    required: true
+  severity:
+    description: Severities that fail the check
+    default: CRITICAL
+  token:
+    description: Registry token, needed only to scan a pushed private image
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+        SEVERITY: ${{ inputs.severity }}
+        TOKEN: ${{ inputs.token }}
+        TRIVY: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+      run: |
+        set -euo pipefail
+        auth=()
+        if [ -n "$TOKEN" ]; then
+          auth=(-e "TRIVY_USERNAME=${GITHUB_ACTOR}" -e "TRIVY_PASSWORD=${TOKEN}")
+        fi
+        docker run --rm "${auth[@]}" \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+          "$TRIVY" image --quiet --ignore-unfixed --severity "$SEVERITY" \
+          --exit-code 1 --format table "$REF"

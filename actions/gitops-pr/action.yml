@@ -1,0 +1,124 @@
+name: GitOps PR
+description: >
+  Record a release in the GitOps repo through a pull request: pin each image
+  by digest, label the resources with the version, open a PR, wait for the
+  manifest checks, merge. ArgoCD rolls out what lands on main.
+  The repo is private on the free plan, so GitHub cannot require the checks
+  or auto-merge — this action waits for them and merges itself.
+inputs:
+  app:
+    description: Application directory under manifests/ (e.g. pepic)
+    required: true
+  version:
+    description: Release version (e.g. 1.4.0)
+    required: true
+  images:
+    description: 'JSON list of {"name": "...", "digest": "sha256:..."}'
+    required: true
+  release-url:
+    description: Link to the service release, for the PR body
+    default: ""
+  app-id:
+    description: GitHub App id (kindorg-ci)
+    required: true
+  private-key:
+    description: GitHub App private key
+    required: true
+  gitops-repo:
+    description: owner/name of the GitOps repo
+    default: kindorg-hq/homelab-k8s
+  checks-timeout:
+    description: Seconds to wait for the manifest checks
+    default: "600"
+outputs:
+  pr-url:
+    description: The merged GitOps PR
+    value: ${{ steps.pr.outputs.url }}
+runs:
+  using: composite
+  steps:
+    - id: target
+      shell: bash
+      env:
+        REPO: ${{ inputs.gitops-repo }}
+      run: |
+        echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+        echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
+
+    # a token for the GitOps repo only, valid for an hour
+    - id: token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ steps.target.outputs.owner }}
+        repositories: ${{ steps.target.outputs.name }}
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ${{ inputs.gitops-repo }}
+        token: ${{ steps.token.outputs.token }}
+        path: .gitops
+        persist-credentials: true
+
+    - id: edit
+      shell: bash
+      working-directory: .gitops/manifests/${{ inputs.app }}/base
+      env:
+        OWNER: ${{ github.repository_owner }}
+        VERSION: ${{ inputs.version }}
+        IMAGES: ${{ inputs.images }}
+      run: |
+        set -euo pipefail
+        kustomize version
+        for row in $(echo "$IMAGES" | jq -c '.[]'); do
+          name=$(echo "$row" | jq -r .name); digest=$(echo "$row" | jq -r .digest)
+          [[ "$digest" == sha256:* ]] || { echo "bad digest for $name: $digest"; exit 1; }
+          kustomize edit set image "ghcr.io/${OWNER,,}/${name}@${digest}"
+        done
+        # version as a label on resources and pod templates, never on
+        # selectors: a Deployment's selector is immutable
+        kustomize edit add label --without-selector --include-templates -f "app.kubernetes.io/version:${VERSION}"
+        kustomize build . > /dev/null
+        git diff --stat
+
+    - id: pr
+      shell: bash
+      working-directory: .gitops
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ inputs.gitops-repo }}
+        APP: ${{ inputs.app }}
+        VERSION: ${{ inputs.version }}
+        IMAGES: ${{ inputs.images }}
+        RELEASE_URL: ${{ inputs.release-url }}
+        SLUG: ${{ steps.token.outputs.app-slug }}
+        TIMEOUT: ${{ inputs.checks-timeout }}
+      run: |
+        set -euo pipefail
+        if git diff --quiet; then
+          echo "Manifests already at ${APP} ${VERSION}, nothing to deliver"
+          exit 0
+        fi
+        uid=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+        git config user.name "${SLUG}[bot]"
+        git config user.email "${uid}+${SLUG}[bot]@users.noreply.github.com"
+        branch="deliver/${APP}/${VERSION}"
+        git switch -c "$branch"
+        git commit -qam "deploy(${APP}): ${VERSION}"
+        git push -q --force origin "$branch"
+        body=$(printf 'Release %s of %s.\n\n%s\n\nImages (pinned by digest):\n%s\n\nOpened by the delivery pipeline; it merges this PR once the manifest checks pass.' \
+          "$VERSION" "$APP" "$RELEASE_URL" "$(echo "$IMAGES" | jq -r '.[] | "- `\(.name)@\(.digest)`"')")
+        url=$(gh pr create --repo "$REPO" --head "$branch" --base main \
+          --title "deploy(${APP}): ${VERSION}" --body "$body")
+        echo "url=$url" >> "$GITHUB_OUTPUT"
+        echo "Opened $url"
+        # checks register a few seconds after the PR opens
+        deadline=$((SECONDS + TIMEOUT))
+        while out=$(gh pr checks "$url" 2>&1); echo "$out" | grep -q "no checks reported"; do
+          [ $SECONDS -lt $deadline ] || { echo "no checks appeared on $url"; exit 1; }
+          sleep 5
+        done
+        timeout $((deadline - SECONDS)) gh pr checks "$url" --watch --fail-fast
+        gh pr merge "$url" --squash --delete-branch
+        echo "Merged $url — ArgoCD takes it from here" >> "$GITHUB_STEP_SUMMARY"

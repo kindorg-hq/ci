@@ -1,0 +1,52 @@
+# Release a service with release-please: on every push to the main branch it
+# keeps a "release x.y.z" PR up to date with the changelog; merging that PR
+# tags the release and creates the GitHub Release. Call it on push:
+#
+#   release:
+#     if: github.event_name == 'push'
+#     uses: kindorg-hq/ci/.github/workflows/release.yml@v1
+#     secrets: inherit
+#
+# It runs as the kindorg-ci GitHub App, not GITHUB_TOKEN: a PR opened with
+# GITHUB_TOKEN would not trigger the checks on the release PR.
+name: release
+
+on:
+  workflow_call:
+    outputs:
+      released:
+        description: '"true" when this push created a release'
+        value: ${{ jobs.release-please.outputs.released }}
+      version:
+        value: ${{ jobs.release-please.outputs.version }}
+      tag:
+        value: ${{ jobs.release-please.outputs.tag }}
+      url:
+        value: ${{ jobs.release-please.outputs.url }}
+    secrets:
+      KINDORG_CI_APP_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.rp.outputs.release_created || 'false' }}
+      version: ${{ steps.rp.outputs.version }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+      url: ${{ steps.rp.outputs.html_url }}
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
