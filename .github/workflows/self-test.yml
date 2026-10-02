@@ -119,6 +119,92 @@ jobs:
       ci-ref: ${{ github.event.pull_request.head.sha }}
       dry-run: true
 
+  redeliver-artifact:
+    # Re-delivery promotes the Artifact of the latest Release's commit. This
+    # repo's Releases have no fixture image, so give the latest one an
+    # Artifact: the image Ship's Build just pushed, copied as
+    # hello-redeliver:<release-commit-sha> (its own name, nothing else uses it).
+    name: "Re-deliver: an Artifact for the latest Release (fixture)"
+    needs: ship
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          CRANE: gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)
+          cfg=$(mktemp -d)
+          run=(docker run --rm -u "$(id -u):$(id -g)" -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg)
+          echo "$TOKEN" | "${run[@]}" -i "$CRANE" auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          from="ghcr.io/${OWNER,,}/hello-ship:${GITHUB_SHA}"
+          to="ghcr.io/${OWNER,,}/hello-redeliver:${sha}"
+          "${run[@]}" "$CRANE" copy "$from" "$to"
+          echo "$tag ($sha): $to = $("${run[@]}" "$CRANE" digest "$to")"
+          rm -rf "$cfg"
+
+  redeliver:
+    # v4 re-delivery as a service calls it, on the fixture: one box,
+    # `redeliver / Deliver` — the latest Release of this repo found, its
+    # commit's Artifact (above) promoted to a throw-away tag and re-scanned,
+    # the report as a dry run on that Release's PRs; no GitOps PR.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: redeliver-artifact
+    uses: ./.github/workflows/redeliver.yml
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      deployments: write
+    with:
+      app: hello
+      images: '[{"name": "hello-redeliver"}]'
+      url: https://hello.example
+      ci-ref: ${{ github.event.pull_request.head.sha }}
+      dry-run: true
+
+  same-deliver:
+    # Ship's Deliver and re-delivery's are two files kept step for step the
+    # same from promote to report (one job each: a shared reusable workflow
+    # would nest the names a level deeper). They differ only in getting the
+    # Release and in the check after promote; anything else that drifts fails.
+    name: "Accept: Ship and re-deliver deliver the same way"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          YQ: mikefarah/yq:4.47.2@sha256:76def1f56f456ecc1c3173ea275218ee17139bc2018c5a07887b15afd88ec03e
+        run: |
+          set -euo pipefail
+          yq() { docker run --rm -i -v "$PWD:/repo:ro" -w /repo "$YQ" "$@"; }
+          # the Deliver job (but for Ship's needs and what it promotes) and
+          # its steps promote, rescan, gitops, report; JSON drops the comments
+          q='.jobs.deliver | del(.needs) | del(.env.DELIVER_IMAGES)
+             | .steps |= map(select(.id == "promote" or .id == "rescan" or .id == "gitops" or .id == "report"))'
+          yq -o json "$q" .github/workflows/ship.yml > "$RUNNER_TEMP/ship.json"
+          yq -o json "$q" .github/workflows/redeliver.yml > "$RUNNER_TEMP/redeliver.json"
+          [ "$(yq -o json '.steps | map(.id) | join(" ")' < "$RUNNER_TEMP/ship.json")" = '"promote rescan gitops report"' ] || {
+            echo "::error::ship.yml's Deliver has no promote … report steps"; exit 1; }
+          diff -u "$RUNNER_TEMP/ship.json" "$RUNNER_TEMP/redeliver.json" || {
+            echo "::error::ship.yml's and redeliver.yml's Deliver jobs drifted apart (above); change both"; exit 1; }
+          echo "Deliver job and steps promote → report: the same in ship.yml and redeliver.yml"
+
   deliver-path:
     # The path a service's artifact takes after a merge: Build runs the
     # fixture's test stage and pushes the image tagged with the commit, Accept
