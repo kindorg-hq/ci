@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.0.0](https://github.com/kindorg-hq/ci/compare/v3.1.0...v4.0.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **#37:** services move to pull-request.yml, ship.yml and redeliver.yml @v4 (README, Migrating from v3 → v4); v3 entry workflows are removed from main (@v3 keeps them). build-image, scan-image and promote-image drop the single-image inputs (name/context/dockerfile, ref, image), the ref/digest outputs and build-image's `version`.
+
+### Features
+
+* **#33:** build, scan and promote take a list of images ([#40](https://github.com/kindorg-hq/ci/issues/40)) ([f19fab9](https://github.com/kindorg-hq/ci/commit/f19fab9c7a0b0fc2abcb1b133e68ad2a437721b0))
+* **#34:** v4 Ship runs Build → Accept → Deliver ([#43](https://github.com/kindorg-hq/ci/issues/43)) ([d202438](https://github.com/kindorg-hq/ci/commit/d202438aee83cbfe565bd4a37c5d7856026eda21))
+* **#35:** v4 pull request runs Build → Accept, two checks ([#42](https://github.com/kindorg-hq/ci/issues/42)) ([83de72d](https://github.com/kindorg-hq/ci/commit/83de72d0066db9391ce184146fefb9051f28f3f2))
+* **#36:** v4 re-deliver runs one Deliver job ([#44](https://github.com/kindorg-hq/ci/issues/44)) ([f182074](https://github.com/kindorg-hq/ci/commit/f18207424494d3aa5a5d83e8c91707bce7360088))
+* **#37:** services enter through pull-request.yml, ship.yml and redeliver.yml ([#45](https://github.com/kindorg-hq/ci/issues/45)) ([af6bad9](https://github.com/kindorg-hq/ci/commit/af6bad9ddb8d58fc78d6ce124d1a7518ae980016))
+
 ## [3.1.0](https://github.com/kindorg-hq/ci/compare/v3.0.1...v3.1.0) (2026-10-02)
 
 
