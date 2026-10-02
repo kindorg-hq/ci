@@ -1,0 +1,16 @@
+# hello's ArgoCD Application, as homelab-k8s keeps it in apps/: gitops-pr
+# writes the kindorg.dev annotations here (annotate-app.sh, self-test).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello
+  namespace: argocd
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/kindorg-hq/homelab-k8s.git
+    targetRevision: main
+    path: manifests/hello/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: public

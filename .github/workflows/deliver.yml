@@ -3,8 +3,10 @@
 # it is promoted: the release tag's commit is resolved, that very image gets
 # the version tag (same digest), is re-scanned (new CVEs since the merge), and
 # is recorded in homelab-k8s by a PR — pinned by digest, labelled with the
-# version. ArgoCD rolls out what lands there. Then the Release is reported on
-# its PRs and the `production` deployment.
+# version, the release commit written on the app's Application. ArgoCD rolls
+# out what lands there. Then the Release is reported on its PRs and the
+# `production` deployment as recorded; ArgoCD reports it running from the
+# cluster (homelab-k8s README, Notifications).
 #
 # release-and-deliver.yml calls it, after cutting the Release or finding the
 # latest one; services do not call it directly.
@@ -143,6 +145,13 @@ jobs:
           done
           echo "images=$out" >> "$GITHUB_OUTPUT"
           echo "$out" | jq .
+      # the release commit, full SHA: gitops-pr writes it on the Application,
+      # and ArgoCD reports running on it (its production deployment, its PR)
+      - id: release-commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+        run: echo "sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${REF}" --jq .sha)" >> "$GITHUB_OUTPUT"
       - id: pr
         uses: ./.kindorg-ci/actions/gitops-pr
         with:
@@ -150,6 +159,8 @@ jobs:
           version: ${{ inputs.version }}
           images: ${{ steps.digests.outputs.images }}
           release-url: ${{ inputs.release-url }}
+          source-sha: ${{ steps.release-commit.outputs.sha }}
+          environment-url: ${{ inputs.environment-url }}
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
 

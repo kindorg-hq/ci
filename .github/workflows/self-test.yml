@@ -54,6 +54,24 @@ jobs:
           persist-credentials: false
       - run: bash actions/gitops-pr/no-downgrade.test.sh
 
+  annotate-app:
+    # The GitOps PR writes the Release on the app's ArgoCD Application
+    # (actions/gitops-pr/annotate-app.sh), run against a copy of
+    # fixtures/gitops/apps/hello.yaml: the kindorg.dev annotations ArgoCD
+    # reports running with, nothing else changed, a re-delivery byte for byte
+    # the same, bad input refused. Cases in annotate-app.test.sh.
+    name: "Accept: the GitOps PR writes the Release on the Application"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash actions/gitops-pr/annotate-app.test.sh
+
   golden-path:
     # The entry a service calls, on a pull request: it must dispatch to the
     # Checks, with its stages resolved from this commit ($/).
