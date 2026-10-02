@@ -126,16 +126,35 @@ runs:
         git push -q --force origin "$branch"
         body=$(printf 'Release %s of %s.\n\n%s\n\nImages (pinned by digest):\n%s\n\nOpened by the delivery pipeline; it merges this PR once the manifest checks pass.' \
           "$VERSION" "$APP" "$RELEASE_URL" "$(echo "$IMAGES" | jq -r '.[] | "- `\(.name)@\(.digest)`"')")
-        url=$(gh pr create --repo "$REPO" --head "$branch" --base main \
-          --title "deploy(${APP}): ${VERSION}" --body "$body")
+        # a re-delivery after a failure reuses the PR the failed run opened
+        n=$(gh api "repos/${REPO}/pulls?head=${REPO%%/*}:${branch}&state=open" --jq '.[0].number // empty')
+        if [ -n "$n" ]; then
+          url="https://github.com/${REPO}/pull/${n}"
+          echo "Reusing $url"
+        else
+          url=$(gh pr create --repo "$REPO" --head "$branch" --base main \
+            --title "deploy(${APP}): ${VERSION}" --body "$body")
+          n=${url##*/}
+          echo "Opened $url"
+        fi
         echo "url=$url" >> "$GITHUB_OUTPUT"
-        echo "Opened $url"
-        # checks register a few seconds after the PR opens
+        # Wait on the check runs of the pushed commit through the REST API: the
+        # App has checks:read; `gh pr checks` would also need actions:read.
+        sha=$(git rev-parse HEAD)
         deadline=$((SECONDS + TIMEOUT))
-        while out=$(gh pr checks "$url" 2>&1); echo "$out" | grep -q "no checks reported"; do
-          [ $SECONDS -lt $deadline ] || { echo "no checks appeared on $url"; exit 1; }
-          sleep 5
+        while :; do
+          [ $SECONDS -lt $deadline ] || { echo "checks on $url did not finish in ${TIMEOUT}s"; exit 1; }
+          runs=$(gh api "repos/${REPO}/commits/${sha}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | {name, status, conclusion}]')
+          total=$(echo "$runs" | jq length)
+          failed=$(echo "$runs" | jq -r '.[] | select(.status == "completed" and (.conclusion | IN("success","neutral","skipped") | not)) | "\(.name): \(.conclusion)"')
+          [ -z "$failed" ] || { echo "checks failed on $url:"; echo "$failed"; exit 1; }
+          pending=$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')
+          # checks register a few seconds after the push
+          [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && break
+          sleep 10
         done
-        timeout $((deadline - SECONDS)) gh pr checks "$url" --watch --fail-fast
-        gh pr merge "$url" --squash --delete-branch
+        echo "$runs" | jq -r '.[] | "\(.name): \(.conclusion)"'
+        gh api -X PUT "repos/${REPO}/pulls/${n}/merge" -f merge_method=squash -f sha="$sha" --silent
+        gh api -X DELETE "repos/${REPO}/git/refs/heads/${branch}" --silent || true
         echo "Merged $url — ArgoCD takes it from here" >> "$GITHUB_STEP_SUMMARY"
