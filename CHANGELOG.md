@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/kindorg-hq/ci/compare/v3.0.1...v3.1.0) (2026-10-02)
+
+
+### Features
+
+* **#19:** the GitOps PR writes the Release on the ArgoCD Application ([#30](https://github.com/kindorg-hq/ci/issues/30)) ([44f737c](https://github.com/kindorg-hq/ci/commit/44f737c18cd1509de6a2682310b4c856b530b5b2))
+
 ## [3.0.1](https://github.com/kindorg-hq/ci/compare/v3.0.0...v3.0.1) (2026-10-02)
 
 
