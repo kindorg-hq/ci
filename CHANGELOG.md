@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/kindorg-hq/ci/compare/v3.0.0...v3.0.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **#27:** wait on GitOps checks through the REST API; reuse an open PR ([#28](https://github.com/kindorg-hq/ci/issues/28)) ([cb6ebeb](https://github.com/kindorg-hq/ci/commit/cb6ebeb39f276ca3946b16fc48ddf191217bf371))
+
 ## [3.0.0](https://github.com/kindorg-hq/ci/compare/v2.1.0...v3.0.0) (2026-10-02)
 
 
