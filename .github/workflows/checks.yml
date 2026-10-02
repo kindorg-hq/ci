@@ -1,31 +1,20 @@
-# Pull-request checks for a service. Call it from the service:
-#
-#   checks:
-#     if: github.event_name == 'pull_request'
-#     uses: kindorg-hq/ci/.github/workflows/checks.yml@v2
-#     with:
-#       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
-#
-# The service keeps its own tests (they differ too much to share); this is the
-# part every service has in common.
+# DEPRECATED — use pull-request.yml. Kept so @v2 callers of checks.yml keep
+# working; it forwards to pull-request.yml (the job names are the new ones).
 name: checks
 
 on:
   workflow_call:
     inputs:
       images:
-        description: 'JSON list of {"name", "context", "dockerfile"} to build and scan; "[]" for none'
         type: string
         default: "[]"
       runner:
-        description: Runner for the image builds (the cluster is arm64)
         type: string
         default: ubuntu-24.04-arm
       trivy-severity:
         type: string
         default: CRITICAL
       ci-ref:
-        description: Version of kindorg-hq/ci whose actions to use
         type: string
         default: v2
 
@@ -34,84 +23,10 @@ permissions:
   pull-requests: read
 
 jobs:
-  pr-title:
-    name: PR title is a Conventional Commit
-    if: github.event_name == 'pull_request'
-    # API-only: a single-CPU unprivileged container is enough
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    steps:
-      # squash merges make the title the commit — and release-please reads commits
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-  secrets:
-    name: No secrets in the change
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      # egress audit: logs every outbound connection of this job
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: gitleaks
-        env:
-          GITLEAKS: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          # only the commits of this change, not the whole history
-          range="${BASE:+$BASE..}$HEAD"
-          [ -n "$BASE" ] || range="$HEAD~1..$HEAD"
-          docker run --rm -v "$PWD:/repo" "$GITLEAKS" git /repo \
-            --log-opts="$range" --redact --no-banner --exit-code 1
-
-  dependencies:
-    name: No vulnerable dependencies added
-    # needs GitHub Advanced Security on private repos, free on public ones
-    if: github.event_name == 'pull_request' && !github.event.repository.private
-    runs-on: ubuntu-slim
-    timeout-minutes: 10
-    steps:
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: high
-
-  image:
-    name: Image builds and scans clean (${{ matrix.image.name }})
-    if: inputs.images != '[]'
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        image: ${{ fromJSON(inputs.images) }}
-    steps:
-      # egress audit: logs every outbound connection of this job
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kindorg-hq/ci
-          ref: ${{ inputs.ci-ref }}
-          path: .kindorg-ci
-          persist-credentials: false
-      - id: build
-        uses: ./.kindorg-ci/actions/build-image
-        with:
-          name: ${{ matrix.image.name }}
-          context: ${{ matrix.image.context || '.' }}
-          dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
-      - uses: ./.kindorg-ci/actions/scan-image
-        with:
-          ref: ${{ steps.build.outputs.ref }}
-          severity: ${{ inputs.trivy-severity }}
+  pull-request:
+    uses: ./.github/workflows/pull-request.yml
+    with:
+      images: ${{ inputs.images }}
+      runner: ${{ inputs.runner }}
+      trivy-severity: ${{ inputs.trivy-severity }}
+      ci-ref: ${{ inputs.ci-ref }}

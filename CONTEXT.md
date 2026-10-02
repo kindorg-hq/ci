@@ -5,6 +5,14 @@ Cluster terms (Platform, Application) are defined in homelab-k8s/CONTEXT.md.
 
 ## Language
 
+**Stage**:
+One of the named phases of a pipeline: **Build** (compile, test, package the Artifact), **Accept** (scans and checks of what was built), **Deliver** (promote the Artifact and record it for the cluster). Integrate and Rehearse exist in the team's model but have no environments here yet.
+_Avoid_: step, phase, job (a job belongs to a Stage)
+
+**Work item**:
+The issue a change belongs to. Every change names it in the PR title's scope, `type(#N): …`, so the changelog traces each line to its issue.
+_Avoid_: ticket, task
+
 **Checks**:
 What every pull request of a service must pass besides its own tests: a Conventional-Commit title, no secrets in the change, no vulnerable dependency added, the image builds and scans clean.
 _Avoid_: CI (too broad — the service's own tests are CI too), gates

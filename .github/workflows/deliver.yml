@@ -61,7 +61,7 @@ permissions:
 
 jobs:
   promote:
-    name: Promote, re-scan (${{ matrix.image.name }})
+    name: "Deliver: promote and re-scan (${{ matrix.image.name }})"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -106,7 +106,7 @@ jobs:
           token: ${{ github.token }}
 
   gitops:
-    name: Record ${{ inputs.app }} ${{ inputs.version }} in homelab-k8s
+    name: "Deliver: record ${{ inputs.app }} ${{ inputs.version }} in homelab-k8s"
     needs: promote
     runs-on: ubuntu-24.04
     timeout-minutes: 30

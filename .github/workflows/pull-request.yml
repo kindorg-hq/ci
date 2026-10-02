@@ -1,0 +1,164 @@
+# Pull-request pipeline: the Build and Accept stages, with no dependencies and
+# nothing published. Call it from the service:
+#
+#   pull-request:
+#     if: github.event_name == 'pull_request'
+#     uses: kindorg-hq/ci/.github/workflows/pull-request.yml@v2
+#     with:
+#       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
+#
+# The service runs its own tests (Build) in its own workflow; this is the part
+# every service shares.
+name: pull-request
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: 'JSON list of {"name", "context", "dockerfile"} to build and scan; "[]" for none'
+        type: string
+        default: "[]"
+      runner:
+        description: Runner for the image builds (the cluster is arm64)
+        type: string
+        default: ubuntu-24.04-arm
+      trivy-severity:
+        type: string
+        default: CRITICAL
+      require-issue:
+        description: The PR title's scope must name the work item, type(#N)
+        type: boolean
+        default: true
+      ci-ref:
+        description: Version of kindorg-hq/ci whose actions to use
+        type: string
+        default: v2
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build:
+    name: "Build: image (${{ matrix.image.name }})"
+    if: inputs.images != '[]'
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      - id: build
+        uses: ./.kindorg-ci/actions/build-image
+        with:
+          name: ${{ matrix.image.name }}
+          context: ${{ matrix.image.context || '.' }}
+          dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
+      # hand the image to the Accept stage
+      - env:
+          REF: ${{ steps.build.outputs.ref }}
+          NAME: ${{ matrix.image.name }}
+        run: docker save "$REF" -o "/tmp/${NAME}.tar"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.image.name }}
+          path: /tmp/${{ matrix.image.name }}.tar
+          retention-days: 1
+
+  image-scan:
+    name: "Accept: image scan (${{ matrix.image.name }})"
+    needs: build
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-${{ matrix.image.name }}
+          path: /tmp
+      - env:
+          NAME: ${{ matrix.image.name }}
+        run: docker load -i "/tmp/${NAME}.tar"
+      - uses: ./.kindorg-ci/actions/scan-image
+        with:
+          ref: local/${{ matrix.image.name }}:check
+          severity: ${{ inputs.trivy-severity }}
+
+  title:
+    name: "Accept: PR title names its change and work item"
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      # Squash merges make the title the commit — release-please reads it, and
+      # the scope (#N) traces the change to its work item in the changelog.
+      # Release PRs (release-please) and dependency PRs (Dependabot) carry
+      # their own scopes and are let through by label.
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          requireScope: ${{ inputs.require-issue }}
+          scopes: ${{ inputs.require-issue && '#\d+' || '' }}
+          ignoreLabels: |
+            autorelease: pending
+            dependencies
+
+  secrets:
+    name: "Accept: no secrets in the change"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        env:
+          GITLEAKS: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # only the commits of this change, not the whole history
+          range="${BASE:+$BASE..}$HEAD"
+          [ -n "$BASE" ] || range="$HEAD~1..$HEAD"
+          docker run --rm -v "$PWD:/repo" "$GITLEAKS" git /repo \
+            --log-opts="$range" --redact --no-banner --exit-code 1
+
+  dependencies:
+    name: "Accept: no vulnerable dependencies added"
+    # needs GitHub Advanced Security on private repos, free on public ones
+    if: "!github.event.repository.private"
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
