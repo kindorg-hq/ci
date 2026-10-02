@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/kindorg-hq/ci/compare/v2.0.0...v2.1.0) (2026-10-02)
+
+
+### Features
+
+* **#5:** name jobs by stage, trace PRs to work items, agent conventions ([#7](https://github.com/kindorg-hq/ci/issues/7)) ([6744ba6](https://github.com/kindorg-hq/ci/commit/6744ba6f38b4ee62b625c371b47e562167392f3c))
+
 ## [2.0.0](https://github.com/kindorg-hq/ci/compare/v1.1.0...v2.0.0) (2026-10-02)
 
 
