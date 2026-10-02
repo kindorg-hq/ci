@@ -103,8 +103,10 @@ Services follow the major tag `@v4`, so a change here reaches all of them at
 the next release of this repo. Each PR runs `self-test.yml` with the PR's own
 actions on `fixtures/`: `pull-request.yml` (job `ci`), `ship.yml` with a
 dry-run Release (job `ship`), `redeliver.yml` as a dry run of this repo's
-latest Release (job `redeliver`), the list form of the image actions, the Artifact list,
-no-downgrade and Application annotation cases, and actionlint. Show new
+latest Release (job `redeliver`), the list form of the image actions, the Artifact list, the
+recording cases (`actions/record`: no-downgrade, Application annotations,
+the rendered manifests verified), a dry-run record of pepic in the real
+homelab-k8s (no diff, nothing pushed), and actionlint. Show new
 behaviour there as a dry run when it would otherwise write somewhere.
 
 - **One job per Stage**, named `Build`, `Accept` or `Deliver`; details are

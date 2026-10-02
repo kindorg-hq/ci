@@ -40,7 +40,7 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   no-downgrade:
-    # The GitOps PR's guard (actions/gitops-pr/no-downgrade.sh), run against
+    # The GitOps PR's guard (actions/record/no-downgrade.sh), run against
     # fixtures/gitops instead of homelab-k8s: a version lower than the recorded
     # one fails, an equal (re-delivery) or higher one passes, an app with no
     # version yet passes. Cases in no-downgrade.test.sh, which runs locally too.
@@ -54,11 +54,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: bash actions/gitops-pr/no-downgrade.test.sh
+      - run: bash actions/record/no-downgrade.test.sh
 
   annotate-app:
     # The GitOps PR writes the Release on the app's ArgoCD Application
-    # (actions/gitops-pr/annotate-app.sh), run against a copy of
+    # (actions/record/annotate-app.sh), run against a copy of
     # fixtures/gitops/apps/hello.yaml: the kindorg.dev annotations ArgoCD
     # reports running with, nothing else changed, a re-delivery byte for byte
     # the same, bad input refused. Cases in annotate-app.test.sh.
@@ -72,7 +72,109 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: bash actions/gitops-pr/annotate-app.test.sh
+      - run: bash actions/record/annotate-app.test.sh
+
+  record:
+    # Recording a Release in homelab-k8s (actions/record/record.sh) on a git
+    # copy of fixtures/gitops: first delivery (two images), re-delivery (no
+    # diff), upgrade, downgrade refused, an image name the manifests do not
+    # use fails naming it (the pin would be a silent no-op), the Application
+    # annotations, bad input refused. Cases in record.test.sh.
+    name: "Accept: recording in homelab-k8s pins what runs"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash actions/record/record.test.sh
+
+  record-dry-run:
+    # The GitOps PR as a dry run on the real homelab-k8s (read-only App
+    # token, no credentials kept, nothing pushed). The fixture app has no
+    # manifests there, so it re-records what homelab-k8s records for pepic:
+    # the release commit from apps/pepic.yaml, that commit's Artifact found in
+    # ghcr — and expects no diff. A diff, or a pin the manifests would not
+    # run, fails here before any service's delivery does.
+    name: "Deliver: a dry-run record in the real homelab-k8s changes nothing"
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    env:
+      APP: pepic
+      YQ: mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: token
+        name: Token of the kindorg-ci App (homelab-k8s, read only)
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+          owner: kindorg-hq
+          repositories: homelab-k8s
+          permission-contents: read
+      - id: recorded
+        name: The Release homelab-k8s records for pepic
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          app_file=$(mktemp)
+          gh api "repos/kindorg-hq/homelab-k8s/contents/apps/${APP}.yaml" -H "Accept: application/vnd.github.raw" > "$app_file"
+          ann() { docker run --rm -i "$YQ" ".metadata.annotations[\"kindorg.dev/$1\"] // \"\"" < "$app_file"; }
+          { echo "version=$(ann version)"; echo "sha=$(ann source-sha)"
+            echo "repo=$(ann source-repo)"; echo "url=$(ann environment-url)"; } | tee -a "$GITHUB_OUTPUT"
+      - id: artifact
+        name: Its Artifact, found by the release commit
+        uses: ./actions/find-artifact
+        with:
+          images: '[{"name": "pepic"}]'
+          sha: ${{ steps.recorded.outputs.sha }}
+          token: ${{ github.token }}
+      - id: gitops
+        name: Record in homelab-k8s (GitOps PR, dry run)
+        uses: ./actions/gitops-pr
+        with:
+          dry-run: "true"
+          app: ${{ env.APP }}
+          version: ${{ steps.recorded.outputs.version }}
+          images: ${{ steps.artifact.outputs.images }}
+          source-sha: ${{ steps.recorded.outputs.sha }}
+          source-repo: ${{ steps.recorded.outputs.repo }}
+          environment-url: ${{ steps.recorded.outputs.url }}
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+      - name: No diff, no PR, and the checkout cannot push
+        env:
+          CHANGED: ${{ steps.gitops.outputs.changed }}
+          DIFF: ${{ steps.gitops.outputs.diff }}
+          PR_URL: ${{ steps.gitops.outputs.pr-url }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          [ "$CHANGED" = false ] && [ -z "$DIFF" ] || {
+            echo "::error::re-recording what homelab-k8s records for ${APP} changed it:"; echo "$DIFF"; exit 1; }
+          [ -z "$PR_URL" ] || { echo "::error::a dry run opened $PR_URL"; exit 1; }
+          if git -C .gitops config --get-regexp '^http\..*extraheader' > /dev/null; then
+            echo "::error::the dry run's checkout kept credentials"; exit 1; fi
+          if git -C .gitops push --dry-run origin HEAD:refs/heads/dry-run-must-not-push 2> /dev/null; then
+            echo "::error::the dry run's checkout could push"; exit 1; fi
+          echo "${APP}: homelab-k8s already records it, dry run printed no diff, opened no PR, and cannot push: ok"
 
   artifact-list:
     # The Artifact list, {name, image, digest} per image, made once and only

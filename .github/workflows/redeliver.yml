@@ -31,8 +31,9 @@
 #                             fails here
 #   Promote                   that list → :X.Y.Z, same digest
 #   then as in Ship: re-scan, record in homelab-k8s (GitOps PR: no downgrade,
-#   pinned by digest, the Release on the Application, an open PR of an earlier
-#   attempt reused, checks waited for, merged), report on the PRs.
+#   pinned by digest, the Release on the Application, verified to run every
+#   image@digest, an open PR of an earlier attempt reused, checks waited for,
+#   merged), report on the PRs.
 # A version already recorded changes nothing in homelab-k8s ("Manifests already
 # at …", no PR); the report then labels and comments only where that is
 # missing, and leaves existing comments and the `production` deployment as

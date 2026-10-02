@@ -130,5 +130,6 @@ Here: build once, promote: the Artifact is built and scanned on merge; a
 Release only adds a version tag to the same digest (checked unchanged) and
 homelab-k8s pins it by digest. Never rebuild after merge. Release only a
 Releasable change on an accepted commit. Steps are containers and scripts with
-their own tests (`no-downgrade.test.sh`, `annotate-app.test.sh`), so they run
+their own tests (`record.test.sh`, `no-downgrade.test.sh`,
+`annotate-app.test.sh`), so they run
 outside Actions.

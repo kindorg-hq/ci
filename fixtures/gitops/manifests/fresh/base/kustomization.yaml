@@ -1,4 +1,4 @@
-# An app never delivered by the golden path: no version label yet.
+# An app never delivered by the pipeline: no version label yet (first delivery).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

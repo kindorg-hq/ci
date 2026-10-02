@@ -64,7 +64,8 @@ nothing to release".
 │ re-scan                                │
 │ record in homelab-k8s (GitOps PR: no   │
 │   downgrade, pinned by digest, Release │
-│   on the Application, checks, merge)   │
+│   on the Application, verified to run  │
+│   every image@digest, checks, merge)   │
 │ report on the PRs: `released` label,   │
 │   "recorded" comment, `production`     │
 │   deployment in_progress               │
@@ -185,10 +186,12 @@ Before the first merge:
   Release) and on homelab-k8s (it opens and merges the GitOps PR). The repo
   sees the org variable `KINDORG_CI_APP_ID` and the org secret
   `KINDORG_CI_APP_KEY`; `secrets: inherit` passes the secret on.
-- **homelab-k8s has `manifests/<app>/base/kustomization.yaml`** naming the
-  images as `ghcr.io/<owner>/<name>`, and **`apps/<app>.yaml`**, the
-  Application named `<app>` (the GitOps PR annotates it; without it Deliver
-  fails before opening the PR).
+- **homelab-k8s has `manifests/<app>/base/kustomization.yaml`** whose
+  containers name each image exactly `ghcr.io/<owner>/<name>` (a tag is fine,
+  the pin replaces it), and **`apps/<app>.yaml`**, the Application named
+  `<app>` (the GitOps PR annotates it). Either missing, or an image named
+  otherwise, fails Deliver at "record in homelab-k8s", naming it, before any
+  PR (homelab-k8s README, "A service's manifests").
 - **The ghcr package lets the repo write**: a new package is created by the
   first push; an existing one must give the repo's Actions write access.
 - **Merge settings**: squash only, PR title as the commit message. The title
@@ -282,7 +285,7 @@ Move to v4 directly:
 | `.github/workflows/pull-request.yml` | What a service's pull request runs: `Build` (Dockerfile `test` stage, then every image, loaded locally and handed to Accept) → `Accept` (image scan, PR title, gitleaks, dependency review — each a step, all run, the failing one named; a summary of all four). Publishes nothing, needs no secrets. |
 | `.github/workflows/ship.yml` | What a merge runs: `Build` (`test` stage, then every image pushed as `:<commit-sha>`) → `Accept` (Trivy over them) → `Deliver` (cut release, promote — digests checked against what Accept scanned —, re-scan, GitOps PR, report on the PRs; each a step, in the concurrency group `golden-path-deliver-<owner/repo>`). One summary, from Deliver. `dry-run` for self-test. |
 | `.github/workflows/redeliver.yml` | Re-delivery, by hand (`workflow_dispatch`): one job, `Deliver` — find the latest Release and that commit's Artifact (nothing rebuilt; none there fails), promote it, re-scan, GitOps PR, report; in Ship's concurrency group. A version already recorded changes nothing in homelab-k8s and leaves comments and the `production` deployment as they are. From promote to report its steps are Ship's Deliver steps (self-test compares them). `dry-run` for self-test. |
-| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), Ship's and re-delivery's Deliver steps the same, the list form of the image actions (two images in one job, one failing; found again by commit), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
+| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), Ship's and re-delivery's Deliver steps the same, the recording cases (`record.test.sh`) and a dry-run record of pepic in the real homelab-k8s (no diff expected), the list form of the image actions (two images in one job, one failing; found again by commit), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `.github/workflows/release.yml` | release-please, for this repo's own releases (callers on `@v2` read the v2 tag's copy). |
 | `actions/artifact/artifact.sh` | The Artifact list `[{"name", "image", "digest"}]`: its shape, the one name → address mapping, its check (the offending entry named), refs. Sourced by the actions below and the workflows; cases in `artifact.test.sh`. |
@@ -291,12 +294,13 @@ Move to v4 directly:
 | `actions/scan-image` | Trivy as a pinned container over an Artifact list (build-image's, find-artifact's or promote-image's `images` output as is); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
 | `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change. `dry-run` tags nothing. |
 | `actions/promote-image` | Add the version tag to each `image@digest` of an Artifact list with crane; fails if a digest changed, naming the image. Output `images`: the list as read back, the same as its input. |
-| `actions/gitops-pr` | Open, wait for and merge the PR to `manifests/<app>/base` and `apps/<app>.yaml` in homelab-k8s: each `image@digest` of the Artifact list pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`, cases in `annotate-app.test.sh`). Refuses a lower version first (`no-downgrade.sh`, cases in `no-downgrade.test.sh`). |
+| `actions/record/record.sh` | Recording a Release in homelab-k8s, on a checkout, files only: `record.sh <checkout> <app>` with `VERSION`, `IMAGES` (the Artifact list), `SOURCE_SHA`, `SOURCE_REPO`, `ENVIRONMENT_URL` → no downgrade (`no-downgrade.sh`), each `image@digest` pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`), then verified: `kustomize build` must render every `image@digest`. Prints the diff (empty: already recorded); pushes nothing. Cases in `record.test.sh`, `no-downgrade.test.sh`, `annotate-app.test.sh`. |
+| `actions/gitops-pr` | The GitHub adapter around `record.sh`: an App token for homelab-k8s, the checkout, the recording, then branch, PR (an open one of an earlier attempt reused), the manifest checks waited for (REST check-runs), merge. Outputs `changed`, `diff`, `pr-url`. `dry-run`: a read-only token and checkout, the diff in the summary, nothing pushed. |
 | `actions/report-delivery` | `released` label and one "recorded" comment on every PR of the Release; `production` deployment of the release commit, `in_progress`. |
 | `actions/delivery-summary` | The one summary of a Ship or re-deliver run: version, commit, digests, Release, GitOps PR, what comes next; the failing step when one failed. The workflows set `KINDORG_CI_NOTES` to a file, and build-image, cut-release, find-artifact, promote-image, gitops-pr and report-delivery write their notes there instead of their own step summaries; this action folds them in, collapsed. Unset, they write step summaries. |
 | `fixtures/hello` | The smallest service (with a `test` stage) that self-test runs the workflows on. |
 | `fixtures/hello-worker`, `fixtures/broken` | A second image without a `test` stage, and one whose tests fail: the list form of the image actions in self-test. |
-| `fixtures/gitops` | A GitOps repo stand-in for the no-downgrade and annotation cases. |
+| `fixtures/gitops` | A homelab-k8s stand-in (hello records 1.4.0; fresh, two images, nothing yet) for the recording cases. |
 | `release-please-config.json`, `.release-please-manifest.json`, `CHANGELOG.md` | This repo's release-please state. |
 
 ## Rules
@@ -348,10 +352,23 @@ Move to v4 directly:
     `app.kubernetes.io/version` already recorded for the app in homelab-k8s
     and refuses a lower one, naming both versions. Equal is allowed
     (re-delivery), and so is none yet (first delivery). The rule is
-    `actions/gitops-pr/no-downgrade.sh`; self-test runs its cases against
+    `actions/record/no-downgrade.sh`; self-test runs its cases against
     `fixtures/gitops`. Break-glass and the guard: see homelab-k8s README.
 - **Images are pinned by digest** in homelab-k8s and labelled
   `app.kubernetes.io/version`. Tags in ghcr can be moved; digests cannot.
+- **A record is verified before it is proposed.** Recording
+  (`actions/record/record.sh`) changes only files of a homelab-k8s checkout
+  — no downgrade, pin, label, annotations — and then renders the app's
+  manifests (`kustomize build`): every `image@digest` of the Artifact list
+  must be in them. A container naming the image otherwise would make the pin
+  a silent no-op — recorded, never running, the comment stuck at "recorded";
+  it fails instead, naming the image and what the manifests do render. The
+  GitHub part (PR, checks, merge) is `actions/gitops-pr`, a thin adapter.
+- **The dry run shows the real diff.** `gitops-pr` with `dry-run` records on
+  a read-only checkout of the real homelab-k8s (an App token with
+  `contents: read`, no credentials kept) and prints the diff it would
+  propose; nothing is pushed. Self-test runs it for pepic, re-recording what
+  homelab-k8s records, and expects no diff.
 - **Trivy fails on CRITICAL with a fix available.** HIGH on old base images
   would drown the signal.
 - **Third-party actions are pinned by SHA** (Dependabot proposes bumps). Tools

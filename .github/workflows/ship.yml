@@ -33,7 +33,8 @@
 #            (:<commit-sha> → :X.Y.Z, same digest, checked against what Accept
 #            scanned), re-scan, record in homelab-k8s (GitOps PR: no
 #            downgrade, pinned by digest, the Release on the Application,
-#            checks waited for, merged), report on the PRs (`released`, one
+#            verified to run every image@digest, checks waited for,
+#            merged), report on the PRs (`released`, one
 #            "recorded" comment, `production` deployment in_progress). From
 #            there ArgoCD reports running on the release commit's PR.
 # Deliveries of one service never overtake each other: Deliver, from cutting

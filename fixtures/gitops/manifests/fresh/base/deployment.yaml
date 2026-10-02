@@ -1,0 +1,19 @@
+# Two images, as a service with a worker has them: both are pinned.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fresh
+spec:
+  selector:
+    matchLabels:
+      app: fresh
+  template:
+    metadata:
+      labels:
+        app: fresh
+    spec:
+      containers:
+      - name: fresh
+        image: ghcr.io/kindorg-hq/fresh
+      - name: worker
+        image: ghcr.io/kindorg-hq/fresh-worker:7d3abc99918dc405132860c8b5b34aa1a3c7cd47
