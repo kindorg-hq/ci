@@ -4,15 +4,19 @@ The golden path from a pull request to the home cluster, shared by every
 service of kindorg-hq. Terms: [CONTEXT.md](CONTEXT.md).
 
 ```
-PR ──▶ checks.yml          title · secrets · dependencies · image builds and scans (local)
-main ─▶ build.yml          the Artifact: built ONCE, pushed as :<commit-sha>, scanned
-        release.yml        release-please keeps a "release x.y.z" PR with the changelog
-        merge release PR ─▶ tag vX.Y.Z + GitHub Release
-                            └▶ deliver.yml   promote :<sha> → :x.y.z (same digest) ▸ re-scan
-                                             ▸ PR to homelab-k8s (digest + version label)
-                                             ▸ manifest checks ▸ merge
-                                             └▶ ArgoCD rolls it out ▸ Telegram
+                    Build                      Accept                          Deliver
+PR    pull-request  image (local)              image scan · title (#N) ·
+                                               secrets · dependencies
+main  build         Artifact :<commit-sha>     artifact scan
+      release       release-please keeps a "release x.y.z" PR ─ merge it ─▶ tag vX.Y.Z
+      deliver                                                                 promote :<sha> → :x.y.z
+                                                                              (same digest), re-scan,
+                                                                              GitOps PR ▸ checks ▸ merge
+                                                                              ▸ ArgoCD ▸ Telegram
 ```
+
+Stages are named Build, Accept, Deliver in every job, so everyone reads a
+pipeline the same way (Integrate and Rehearse have no environments here yet).
 
 **Build once, promote.** The image that reaches the cluster is byte for byte
 the one built and scanned on merge. A release only adds a tag to its digest
@@ -33,9 +37,9 @@ on:
     branches: [main]
 
 jobs:
-  checks:
+  pull-request:
     if: github.event_name == 'pull_request'
-    uses: kindorg-hq/ci/.github/workflows/checks.yml@v2
+    uses: kindorg-hq/ci/.github/workflows/pull-request.yml@v2
     with:
       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
 
@@ -71,7 +75,8 @@ Plus, in the service repo:
   version; `bootstrap-sha` for forks, so the first changelog does not pull in
   the upstream history);
 - merge settings: squash only, PR title as the commit message — the title is
-  what release-please reads;
+  what release-please reads, and its scope names the work item:
+  `fix(#12): …` (see [AGENTS.md](AGENTS.md));
 - the kindorg-ci GitHub App installed on it; it reads `vars.KINDORG_CI_APP_ID`
   and `secrets.KINDORG_CI_APP_KEY`.
 

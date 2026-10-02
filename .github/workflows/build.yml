@@ -1,4 +1,4 @@
-# Build the artifact — once, on every merge to the main branch. Each image is
+# Build and Accept the artifact — once, on every merge to the main branch. Each image is
 # pushed tagged with the commit SHA and scanned. A Release later promotes this
 # exact image (deliver.yml); nothing is rebuilt after this point.
 #
@@ -31,8 +31,8 @@ permissions:
   contents: read
 
 jobs:
-  image:
-    name: Build artifact (${{ matrix.image.name }})
+  artifact:
+    name: "Build: artifact (${{ matrix.image.name }})"
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     permissions:
@@ -63,8 +63,31 @@ jobs:
           dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
           push: "true"
           token: ${{ github.token }}
+
+  artifact-scan:
+    name: "Accept: artifact scan (${{ matrix.image.name }})"
+    needs: artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
       - uses: ./.kindorg-ci/actions/scan-image
         with:
-          ref: ${{ steps.build.outputs.ref }}
+          ref: ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}:${{ github.sha }}
           severity: ${{ inputs.trivy-severity }}
           token: ${{ github.token }}

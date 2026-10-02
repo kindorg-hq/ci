@@ -12,14 +12,14 @@ permissions:
   pull-requests: read
 
 jobs:
-  checks:
-    uses: ./.github/workflows/checks.yml
+  pull-request:
+    uses: ./.github/workflows/pull-request.yml
     with:
       images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
       ci-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
   lint:
-    name: Workflows and actions are valid
+    name: "Accept: workflows and actions are valid"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -39,7 +39,7 @@ jobs:
     # commit and scans the pushed index (that scan broke the first real release:
     # Trivy looked for linux/amd64 in an arm64 index); deliver.yml promotes it
     # to a version without rebuilding — the digest must not change.
-    name: Artifact builds, scans, promotes unchanged
+    name: "Build, Accept, Deliver: artifact path of the fixture"
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
