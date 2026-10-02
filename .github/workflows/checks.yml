@@ -2,7 +2,7 @@
 #
 #   checks:
 #     if: github.event_name == 'pull_request'
-#     uses: kindorg-hq/ci/.github/workflows/checks.yml@v1
+#     uses: kindorg-hq/ci/.github/workflows/checks.yml@v2
 #     with:
 #       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
 #
@@ -27,7 +27,7 @@ on:
       ci-ref:
         description: Version of kindorg-hq/ci whose actions to use
         type: string
-        default: v1
+        default: v2
 
 permissions:
   contents: read

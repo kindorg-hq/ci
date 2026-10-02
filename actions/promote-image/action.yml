@@ -1,0 +1,52 @@
+name: Promote image
+description: >
+  Give an already built image a release tag — without rebuilding it. Finds the
+  image built for a commit (tagged with the commit SHA on merge), adds the
+  version tag to the very same manifest, and checks the digest did not change:
+  what was scanned on merge is byte for byte what gets delivered.
+inputs:
+  image:
+    description: Full image name (e.g. ghcr.io/kindorg-hq/pepic)
+    required: true
+  from-tag:
+    description: Tag of the built artifact — the commit SHA
+    required: true
+  to-tag:
+    description: Tag to add — the release version
+    required: true
+  token:
+    description: Token with packages:write
+    required: true
+outputs:
+  digest:
+    description: Digest of the promoted artifact (unchanged by promotion)
+    value: ${{ steps.promote.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    - id: promote
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        FROM: ${{ inputs.from-tag }}
+        TO: ${{ inputs.to-tag }}
+        TOKEN: ${{ inputs.token }}
+        # crane re-puts the same manifest under a new tag: same bytes, same
+        # digest. (buildx imagetools create may rebuild the index.)
+        CRANE: gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1
+      run: |
+        set -euo pipefail
+        cfg=$(mktemp -d)
+        crane() { docker run --rm -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg "$CRANE" "$@"; }
+        echo "$TOKEN" | docker run --rm -i -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg "$CRANE" \
+          auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        built=$(crane digest "${IMAGE}:${FROM}") || {
+          echo "::error::no artifact ${IMAGE}:${FROM} — was it built on merge to the main branch?"; exit 1; }
+        crane tag "${IMAGE}@${built}" "$TO"
+        promoted=$(crane digest "${IMAGE}:${TO}")
+        rm -rf "$cfg"
+        if [ "$built" != "$promoted" ]; then
+          echo "::error::promotion changed the digest: $built → $promoted"; exit 1
+        fi
+        echo "digest=$built" >> "$GITHUB_OUTPUT"
+        echo "${IMAGE}:${TO} → ${built} (built for ${FROM})" >> "$GITHUB_STEP_SUMMARY"

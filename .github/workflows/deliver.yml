@@ -1,17 +1,21 @@
-# Deliver a released version to the cluster: build and push the images, scan
-# them, then record them in homelab-k8s through a pull request (pinned by
-# digest, labelled with the version). ArgoCD rolls out what lands there.
+# Deliver a Release to the cluster — without building anything. The artifact
+# was built and scanned on merge (build.yml), tagged with its commit SHA; here
+# it is promoted: the release tag's commit is resolved, that very image gets
+# the version tag (same digest), is re-scanned (new CVEs since the merge), and
+# is recorded in homelab-k8s by a PR — pinned by digest, labelled with the
+# version. ArgoCD rolls out what lands there.
 #
 #   deliver:
-#     needs: release
+#     needs: [build, release]
 #     if: needs.release.outputs.released == 'true'
-#     uses: kindorg-hq/ci/.github/workflows/deliver.yml@v1
+#     uses: kindorg-hq/ci/.github/workflows/deliver.yml@v2
+#     permissions: {contents: read, packages: write}
 #     with:
 #       app: pepic
 #       version: ${{ needs.release.outputs.version }}
 #       ref: ${{ needs.release.outputs.tag }}
 #       release-url: ${{ needs.release.outputs.url }}
-#       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
+#       images: '[{"name": "pepic"}]'
 #     secrets: inherit
 #
 # Only releases are delivered; there is no rollback path — a bad release is
@@ -36,18 +40,15 @@ on:
         type: string
         default: ""
       images:
-        description: 'JSON list of {"name", "context", "dockerfile"}'
+        description: 'JSON list of {"name"} — the images built for the release commit'
         type: string
         required: true
-      runner:
-        type: string
-        default: ubuntu-24.04-arm
       trivy-severity:
         type: string
         default: CRITICAL
       ci-ref:
         type: string
-        default: v1
+        default: v2
     outputs:
       gitops-pr:
         value: ${{ jobs.gitops.outputs.pr-url }}
@@ -59,10 +60,10 @@ permissions:
   contents: read
 
 jobs:
-  image:
-    name: Build, push, scan (${{ matrix.image.name }})
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 45
+  promote:
+    name: Promote, re-scan (${{ matrix.image.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -71,38 +72,42 @@ jobs:
       matrix:
         image: ${{ fromJSON(inputs.images) }}
     steps:
-      # egress audit: logs every outbound connection of this job
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kindorg-hq/ci
           ref: ${{ inputs.ci-ref }}
           path: .kindorg-ci
           persist-credentials: false
-      - id: build
-        uses: ./.kindorg-ci/actions/build-image
+      # the artifact is tagged with the commit it was built from
+      - id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+          OWNER: ${{ github.repository_owner }}
+          NAME: ${{ matrix.image.name }}
+        run: |
+          set -euo pipefail
+          echo "sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${REF}" --jq .sha)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${OWNER,,}/${NAME}" >> "$GITHUB_OUTPUT"
+      - id: promote
+        uses: ./.kindorg-ci/actions/promote-image
         with:
-          name: ${{ matrix.image.name }}
-          context: ${{ matrix.image.context || '.' }}
-          dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
-          push: "true"
-          version: ${{ inputs.version }}
+          image: ${{ steps.commit.outputs.image }}
+          from-tag: ${{ steps.commit.outputs.sha }}
+          to-tag: ${{ inputs.version }}
           token: ${{ github.token }}
       - uses: ./.kindorg-ci/actions/scan-image
         with:
-          ref: ${{ steps.build.outputs.ref }}
+          ref: ${{ steps.commit.outputs.image }}@${{ steps.promote.outputs.digest }}
           severity: ${{ inputs.trivy-severity }}
           token: ${{ github.token }}
 
   gitops:
     name: Record ${{ inputs.app }} ${{ inputs.version }} in homelab-k8s
-    needs: image
+    needs: promote
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

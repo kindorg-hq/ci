@@ -4,7 +4,7 @@
 #
 #   release:
 #     if: github.event_name == 'push'
-#     uses: kindorg-hq/ci/.github/workflows/release.yml@v1
+#     uses: kindorg-hq/ci/.github/workflows/release.yml@v2
 #     secrets: inherit
 #
 # It runs as the kindorg-ci GitHub App, not GITHUB_TOKEN: a PR opened with

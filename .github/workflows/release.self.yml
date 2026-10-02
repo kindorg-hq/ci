@@ -1,6 +1,6 @@
 # Releases of kindorg-hq/ci itself. release-please keeps a release PR with the
 # changelog; merging it tags vX.Y.Z — and only then is the moving major tag
-# (v1) advanced, so services on @v1 never get code that has not been released.
+# (v2, …) advanced, so services on @v2 never get code that has not been released.
 name: release (ci)
 
 on:

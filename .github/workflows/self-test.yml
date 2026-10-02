@@ -35,10 +35,11 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   deliver-path:
-    # The checks above scan a local image; delivery scans the pushed one — an
-    # index in ghcr. That path broke the first real release (Trivy looked for
-    # linux/amd64 in an arm64 index), so it is tested here too.
-    name: Pushed image scans clean (delivery path)
+    # The path a service's artifact takes: build.yml pushes it tagged with the
+    # commit and scans the pushed index (that scan broke the first real release:
+    # Trivy looked for linux/amd64 in an arm64 index); deliver.yml promotes it
+    # to a version without rebuilding — the digest must not change.
+    name: Artifact builds, scans, promotes unchanged
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -59,9 +60,14 @@ jobs:
           context: fixtures/hello
           dockerfile: fixtures/hello/Dockerfile
           push: "true"
-          version: 0.0.0-pr-${{ github.event.pull_request.number }}
           token: ${{ github.token }}
       - uses: ./actions/scan-image
         with:
           ref: ${{ steps.build.outputs.ref }}
+          token: ${{ github.token }}
+      - uses: ./actions/promote-image
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/hello
+          from-tag: ${{ github.sha }}
+          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-promoted
           token: ${{ github.token }}
