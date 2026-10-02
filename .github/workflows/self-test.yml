@@ -2,6 +2,8 @@
 # a change here must pass before it can become the version every service uses.
 # On push to main it runs inside release.self.yml, so a release waits for it.
 name: self-test
+# as a service's PR run reads (pr.yml's caller); ignored when release.self.yml calls it
+run-name: "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
 
 on:
   pull_request:
@@ -14,6 +16,14 @@ permissions:
 jobs:
   pull-request:
     uses: ./.github/workflows/pull-request.yml
+    with:
+      images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
+      ci-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  # v4: the pull request as a service calls it — job id `ci`, so the checks
+  # are `ci / Build` and `ci / Accept`, the two names a ruleset requires
+  ci:
+    uses: ./.github/workflows/pr.yml
     with:
       images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
       ci-ref: ${{ github.event.pull_request.head.sha || github.sha }}

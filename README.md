@@ -65,11 +65,12 @@ the Artifact built and scanned on merge. A Release only adds a tag to its digest
 | --- | --- |
 | `.github/workflows/golden-path.yml` | The entry a service calls. Picks the path from the event: `pull_request` → `pull-request.yml`; push to the default branch → `build.yml`, then `release-and-deliver.yml` in the concurrency group `golden-path-deliver-<owner/repo>`; `workflow_dispatch` → `release-and-deliver.yml` only. Calls its stages with `$/` (this repo at the commit being run). |
 | `.github/workflows/pull-request.yml` | The Checks: image build (with the `test` stage) and scan, PR title, gitleaks, dependency review. Publishes nothing. |
+| `.github/workflows/pr.yml` | v4, the pull request a service calls: two jobs, `Build` (Dockerfile `test` stage, then every image, loaded locally) → `Accept` (image scan, PR title, gitleaks, dependency review — each a step, all run, the failing one named). Publishes nothing. Not released yet: v4.0.0 ships with Ship and re-deliver. |
 | `.github/workflows/build.yml` | Build and Accept of the Artifact on merge: push `:<commit-sha>` to ghcr, scan the pushed image. |
 | `.github/workflows/release-and-deliver.yml` | The Deliver stage as one unit: `Deliver: cut release` (push) or `Deliver: find the latest release` (workflow_dispatch), then `deliver.yml`. Not called by services directly. |
 | `.github/workflows/deliver.yml` | Deliver a Release without building: promote and re-scan each image, record it in homelab-k8s, report on the PRs. |
 | `.github/workflows/release.yml` | release-please. In v3 only `release.self.yml` uses it, for this repo's own releases; services no longer do (callers on `@v2` read the v2 tag's copy). |
-| `.github/workflows/self-test.yml` | This repo's PR checks: the Checks and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the list form of the image actions (two fixture images in one job), the report dry run, the no-downgrade cases, the Application annotation cases, actionlint. |
+| `.github/workflows/self-test.yml` | This repo's PR checks: the Checks (v3 `pull-request.yml`, and v4 `pr.yml` as job `ci`) and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the list form of the image actions (two fixture images in one job), the report dry run, the no-downgrade cases, the Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step; v3's `name`/`context`/`dockerfile` is a list of one) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Output `images`: `[{"name", "ref", "digest"}]`. The first failing image stops it, named. |
 | `actions/scan-image` | Trivy as a pinned container over a list of images (`images`: JSON `[{"name", "ref"}]`, build-image's or promote-image's `images` output as is; v3's `ref` is a list of one); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
@@ -138,6 +139,34 @@ Before the first merge:
 
 Dependabot PRs (label `dependencies`) skip the title check, and get no
 secrets, which the PR path does not need.
+
+### v4 pull request (coming in v4.0.0)
+
+`.github/workflows/pr.yml` in the service; keep the job id `ci`:
+
+```yaml
+name: pr
+run-name: "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
+on:
+  pull_request:
+
+jobs:
+  ci:
+    uses: kindorg-hq/ci/.github/workflows/pr.yml@v4
+    permissions: {contents: read, pull-requests: read}
+    with:
+      images: '[{"name": "pepic"}]'      # context ".", dockerfile "Dockerfile"
+```
+
+The ruleset requires two checks, whatever the number of images:
+
+- `ci / Build` — the `test` stage and every image build;
+- `ci / Accept` — image scan, PR title names its change and work item, no
+  secrets in the change, no vulnerable dependencies added (skipped on private
+  repos). The failing step names the check; the run summary lists all four.
+
+Optional inputs: `runner`, `trivy-severity`, `require-issue`, `ci-ref` (`v4`),
+as in v3.
 
 ## Migrating from v2
 
