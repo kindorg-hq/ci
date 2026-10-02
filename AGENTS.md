@@ -103,7 +103,7 @@ Services follow the major tag `@v4`, so a change here reaches all of them at
 the next release of this repo. Each PR runs `self-test.yml` with the PR's own
 actions on `fixtures/`: `pull-request.yml` (job `ci`), `ship.yml` with a
 dry-run Release (job `ship`), `redeliver.yml` as a dry run of this repo's
-latest Release (job `redeliver`), the list form of the image actions, the
+latest Release (job `redeliver`), the list form of the image actions, the Artifact list,
 no-downgrade and Application annotation cases, and actionlint. Show new
 behaviour there as a dry run when it would otherwise write somewhere.
 
@@ -114,8 +114,16 @@ behaviour there as a dry run when it would otherwise write somewhere.
   kept step for step the same from promote to report (one file each: a
   shared reusable workflow would nest the names a level deeper); self-test
   fails when they drift.
-- **Breaking** (`!`): a change to an input or output of a workflow or
-  action, or to a job name (it is a required check name).
+- **Breaking** (`!`): a change to an input of `pull-request.yml`,
+  `ship.yml` or `redeliver.yml`, or to a job name (it is a required check
+  name). Those three workflows are the public interface; `actions/` are
+  internal to them, so changing an action's inputs or outputs is not
+  breaking.
+- **The images travel as the Artifact list**, `[{"name", "image",
+  "digest"}]`, made once by Build (or `find-artifact` on re-delivery) and only
+  read afterwards; its shape and the name → address mapping live in
+  `actions/artifact/artifact.sh`. Read `image`/`digest` from it, never
+  rebuild an address from a name.
 - A required check renamed or removed here: switch this repo's ruleset to
   the names the PR's run shows before merging, or the PR cannot merge.
 

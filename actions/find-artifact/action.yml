@@ -1,0 +1,59 @@
+name: Find artifact
+description: >
+  The Artifact list of a commit built before — for re-delivery, where nothing
+  is built. `images` is the service's `images` input (only the names count),
+  resolved to addresses as build-image does (actions/artifact/artifact.sh);
+  each image's digest is what <address>:<commit-sha> holds in ghcr, the tag
+  Build pushed on merge. An image with no such tag fails the step, named:
+  that commit has no Artifact.
+inputs:
+  images:
+    description: 'The service''s images, [{"name", ...}] as ship.yml takes them'
+    required: true
+  sha:
+    description: The commit whose Artifact to find (full SHA)
+    required: true
+  token:
+    description: Token with packages:read
+    required: true
+outputs:
+  images:
+    description: The Artifact list, in input order, [{"name", "image", "digest"}]
+    value: ${{ steps.find.outputs.images }}
+runs:
+  using: composite
+  steps:
+    - id: find
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        SHA: ${{ inputs.sha }}
+        TOKEN: ${{ inputs.token }}
+        CRANE: gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1
+      run: |
+        set -euo pipefail
+        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
+        [[ $SHA =~ ^[0-9a-f]{40}$ ]] || { echo "::error::find-artifact: sha must be a full commit SHA, got '$SHA'"; exit 1; }
+        list=$(artifact_images find-artifact "$IMAGES")
+
+        cfg=$(mktemp -d)
+        trap 'rm -rf "$cfg"' EXIT
+        # as the runner's user: the credentials dir is private (mktemp -d, 0700)
+        run=(docker run --rm -u "$(id -u):$(id -g)" -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg)
+        crane() { "${run[@]}" "$CRANE" "$@" < /dev/null; }
+        echo "$TOKEN" | "${run[@]}" -i "$CRANE" \
+          auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+        notes=${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}
+        echo "The Artifact of \`${SHA:0:7}\`, promoted again, nothing rebuilt:" >> "$notes"
+        out=()
+        # fd 3: docker run must not eat the list
+        while IFS=$'\t' read -r -u 3 name image _ _; do
+          digest=$(crane digest "${image}:${SHA}") || {
+            echo "::error::find-artifact: ${name}: no artifact ${image}:${SHA} — was it built on merge to the main branch?"; exit 1; }
+          echo "- \`${image}:${SHA}\` = \`${digest}\`" | tee -a "$notes"
+          out+=("$(printf '%s\t%s\t%s' "$name" "$image" "$digest")")
+        done 3<<< "$list"
+
+        images=$(printf '%s\n' "${out[@]}" | artifact_list)
+        echo "images=${images}" >> "$GITHUB_OUTPUT"

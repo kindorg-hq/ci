@@ -16,7 +16,9 @@ inputs:
     description: Release version (e.g. 1.4.0)
     required: true
   images:
-    description: 'JSON list of {"name": "...", "digest": "sha256:..."}'
+    description: >
+      The Artifact list to record, [{"name", "image", "digest"}], digests set
+      (actions/artifact/artifact.sh): each image is pinned as image@digest.
     required: true
   release-url:
     description: Link to the service release, for the PR body
@@ -92,20 +94,18 @@ runs:
       shell: bash
       working-directory: .gitops/manifests/${{ inputs.app }}/base
       env:
-        OWNER: ${{ github.repository_owner }}
         VERSION: ${{ inputs.version }}
         IMAGES: ${{ inputs.images }}
       run: |
         set -euo pipefail
+        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
         # tools pinned by digest, not whatever the runner image ships
         kustomize() { docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
           registry.k8s.io/kustomize/kustomize:v5.8.1@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429 "$@"; }
-        jq() { docker run --rm -i ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486 "$@"; }
+        refs=$(artifact_refs gitops-pr "$IMAGES" digest)
         kustomize version
-        for row in $(echo "$IMAGES" | jq -c '.[]'); do
-          name=$(echo "$row" | jq -r .name); digest=$(echo "$row" | jq -r .digest)
-          [[ "$digest" == sha256:* ]] || { echo "bad digest for $name: $digest"; exit 1; }
-          kustomize edit set image "ghcr.io/${OWNER,,}/${name}@${digest}"
+        for ref in $refs; do
+          kustomize edit set image "$ref"
         done
         # version as a label on resources and pod templates, never on
         # selectors: a Deployment's selector is immutable
@@ -121,7 +121,6 @@ runs:
       working-directory: .gitops
       env:
         APP: ${{ inputs.app }}
-        OWNER: ${{ github.repository_owner }}
         IMAGES_JSON: ${{ inputs.images }}
         SOURCE_REPO: ${{ inputs.source-repo }}
         SOURCE_SHA: ${{ inputs.source-sha }}
@@ -129,9 +128,9 @@ runs:
         ENVIRONMENT_URL: ${{ inputs.environment-url }}
       run: |
         set -euo pipefail
-        jq() { docker run --rm -i ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486 "$@"; }
+        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
         # as kustomize pins them, so as the pods run them
-        IMAGES=$(echo "$IMAGES_JSON" | jq -r --arg o "${OWNER,,}" '[.[] | "ghcr.io/\($o)/\(.name)@\(.digest)"] | join(" ")')
+        IMAGES=$(artifact_refs gitops-pr "$IMAGES_JSON" digest | paste -sd ' ' -)
         export IMAGES
         bash "$GITHUB_ACTION_PATH/annotate-app.sh" "apps/${APP}.yaml" "$APP"
 
@@ -155,6 +154,7 @@ runs:
       run: |
         set -euo pipefail
         jq() { docker run --rm -i ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486 "$@"; }
+        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
         if git diff --quiet; then
           echo "Manifests already at ${APP} ${VERSION}, nothing to deliver"
           exit 0
@@ -169,7 +169,7 @@ runs:
         note="No release annotations on the Application: ArgoCD reports this one to Telegram only."
         [ -z "$SOURCE_SHA" ] || note="\`apps/${APP}.yaml\` carries the release (\`kindorg.dev/*\` annotations, commit \`${SOURCE_SHA}\`): ArgoCD reports it running or degraded on GitHub."
         body=$(printf 'Release %s of %s.\n\n%s\n\nImages (pinned by digest):\n%s\n\n%s\n\nOpened by the delivery pipeline; it merges this PR once the manifest checks pass.' \
-          "$VERSION" "$APP" "$RELEASE_URL" "$(echo "$IMAGES" | jq -r '.[] | "- `\(.name)@\(.digest)`"')" "$note")
+          "$VERSION" "$APP" "$RELEASE_URL" "$(artifact_refs gitops-pr "$IMAGES" digest | sed 's/.*/- `&`/')" "$note")
         # a re-delivery after a failure reuses the PR the failed run opened
         n=$(gh api "repos/${REPO}/pulls?head=${REPO%%/*}:${branch}&state=open" --jq '.[0].number // empty')
         if [ -n "$n" ]; then

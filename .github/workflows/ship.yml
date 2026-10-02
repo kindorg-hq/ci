@@ -24,7 +24,9 @@
 # a run-name with the commit message would carry its whole body; GitHub's own
 # title is its first line).
 #   Build    the Dockerfile's `test` stage (when it has one), then each image,
-#            pushed as ghcr.io/<owner>/<name>:<commit-sha> — the Artifact.
+#            pushed as ghcr.io/<owner>/<name>:<commit-sha> — the Artifact. Its
+#            output is the Artifact list, {name, image, digest} per image
+#            (actions/artifact/artifact.sh), which every step after only reads.
 #   Accept   Trivy over the pushed images (CRITICAL with a fix fails).
 #   Deliver  cut release (git-cliff: only a Releasable change tags this very
 #            commit vX.Y.Z; otherwise the run ends here, green), promote
@@ -41,8 +43,8 @@
 #
 # Re-delivery (redeliver.yml) runs this Deliver job too, as its own file: the
 # same steps from promote to report (self-test compares them), with "find the
-# latest Release" in place of "cut release" and, nothing being built there, a
-# check that the Artifact exists in place of the one against Accept. The steps
+# latest Release" in place of "cut release" and, nothing being built there,
+# the release commit's Artifact list found in ghcr in place of Build's. The steps
 # are this repo's actions, the summary included (actions/delivery-summary). Those actions write their notes
 # to the file KINDORG_CI_NOTES names, not to their own step summaries, so the
 # run has one summary.
@@ -182,8 +184,6 @@ jobs:
       KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
       # what a dry run promotes to instead of the version
       DRY_RUN_TAG: 0.0.0-dry-run-${{ github.event.pull_request.number || github.run_id }}
-      # what is promoted: the images Build pushed and Accept scanned
-      DELIVER_IMAGES: ${{ needs.build.outputs.images }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -237,14 +237,15 @@ jobs:
             echo "sha=$GITHUB_SHA"; echo "ref=$ref"; } >> "$GITHUB_OUTPUT"
 
       # From here to the summary, ship.yml and redeliver.yml run the same
-      # steps (self-test compares them), but for the check after promote.
+      # steps (self-test compares them), but for what is promoted and the
+      # check after promote. Promoted: the Artifact list Build pushed and
+      # Accept scanned.
       - id: promote
         name: Promote :<commit-sha> to the version, same digest
         if: steps.release.outputs.deliver == 'true'
         uses: ./.kindorg-ci/actions/promote-image
         with:
-          images: ${{ env.DELIVER_IMAGES }}
-          from-tag: ${{ steps.release.outputs.sha }}
+          images: ${{ needs.build.outputs.images }}
           to-tag: ${{ inputs.dry-run && env.DRY_RUN_TAG || steps.release.outputs.version }}
           token: ${{ github.token }}
       # build once, promote: what is delivered is what Accept scanned
@@ -254,15 +255,11 @@ jobs:
         env:
           ACCEPTED: ${{ needs.build.outputs.images }}
           PROMOTED: ${{ steps.promote.outputs.images }}
-          JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
         run: |
-          set -euo pipefail
-          jq() { docker run --rm -i "$JQ" "$@"; }
-          accepted=$(echo "$ACCEPTED" | jq -c 'map({name, digest})')
-          promoted=$(echo "$PROMOTED" | jq -c 'map({name, digest})')
-          [ "$accepted" = "$promoted" ] || {
-            echo "::error::promoted images differ from the accepted ones: $accepted → $promoted"; exit 1; }
-          echo "$promoted"
+          # two Artifact lists, compared as they are
+          [ "$ACCEPTED" = "$PROMOTED" ] || {
+            echo "::error::promoted images differ from the accepted ones: $ACCEPTED → $PROMOTED"; exit 1; }
+          echo "$PROMOTED"
       - id: rescan
         name: Re-scan the promoted images
         if: steps.same.outcome == 'success'

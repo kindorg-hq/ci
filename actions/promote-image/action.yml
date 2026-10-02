@@ -1,20 +1,17 @@
 name: Promote image
 description: >
   Give already built images a release tag — without rebuilding them, one
-  after the other in one step. `images` is a JSON list of {"name"} (images
-  under ghcr.io/<owner>/, as build-image takes them). For each, finds the image built for a commit
-  (tagged with the commit SHA on merge), adds the version tag to the very same
-  manifest, and checks the digest did not change: what was scanned on merge
-  is byte for byte what gets delivered. The first image that fails stops the
-  step, named in the error.
+  after the other in one step. `images` is the Artifact list
+  (actions/artifact/artifact.sh), every entry pushed (with a digest): what
+  Build pushed, or what find-artifact found for the release commit. For
+  each, adds the version tag to that very manifest (image@digest) and reads
+  the tag back: the digest must not change — what was scanned is byte for
+  byte what gets delivered. Renames nothing: the output is the list as read
+  back from the registry, the same as the input when all went well. The
+  first image that fails stops the step, named in the error.
 inputs:
   images:
-    description: >
-      JSON list of images to promote, each {"name"} under ghcr.io/<owner>/
-      (e.g. [{"name": "pepic"}, {"name": "pepic-worker"}]).
-    required: true
-  from-tag:
-    description: Tag of the built artifact — the commit SHA
+    description: The Artifact list to promote, [{"name", "image", "digest"}], digests set
     required: true
   to-tag:
     description: Tag to add — the release version
@@ -25,9 +22,8 @@ inputs:
 outputs:
   images:
     description: >
-      JSON list, in input order, of {"name", "image", "ref", "digest"} per
-      image (ref is image@digest): scan-image takes it as its `images`,
-      gitops-pr as its `images` ({"name", "digest"}).
+      The Artifact list, in input order, each digest as the version tag
+      resolves to it: scan-image and gitops-pr take it as their `images`.
     value: ${{ steps.promote.outputs.images }}
 runs:
   using: composite
@@ -36,24 +32,15 @@ runs:
       shell: bash
       env:
         IMAGES: ${{ inputs.images }}
-        FROM: ${{ inputs.from-tag }}
         TO: ${{ inputs.to-tag }}
         TOKEN: ${{ inputs.token }}
-        OWNER: ${{ github.repository_owner }}
         # crane re-puts the same manifest under a new tag: same bytes, same
         # digest. (buildx imagetools create may rebuild the index.)
         CRANE: gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1
-        JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
       run: |
         set -euo pipefail
-        jq() { docker run --rm -i "$JQ" "$@"; }
-
-        # the list as "name<TAB>full image"
-        list=$(echo "$IMAGES" | jq -r --arg owner "${OWNER,,}" '
-          if type == "array" and length > 0 and all(.[]; type == "object" and (.name | type) == "string")
-          then .[] | [.name, "ghcr.io/\($owner)/\(.name)"] | @tsv
-          else error("bad images") end') || {
-          echo "::error::promote-image: images must be a non-empty JSON list of {\"name\"}, got: ${IMAGES}"; exit 1; }
+        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
+        list=$(artifact_rows promote-image "$IMAGES" digest)
 
         cfg=$(mktemp -d)
         trap 'rm -rf "$cfg"' EXIT
@@ -65,20 +52,16 @@ runs:
 
         out=()
         # fd 3: docker run must not eat the list
-        while IFS=$'\t' read -r -u 3 name image; do
-          [[ "$name" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || {
-            echo "::error::promote-image: \"${name}\" is not an image name (lowercase letters, digits, . _ -)"; exit 1; }
-          built=$(crane digest "${image}:${FROM}") || {
-            echo "::error::promote-image: ${name}: no artifact ${image}:${FROM} — was it built on merge to the main branch?"; exit 1; }
-          crane tag "${image}@${built}" "$TO"
+        while IFS=$'\t' read -r -u 3 name image digest; do
+          crane tag "$(artifact_ref "$image" "$digest")" "$TO" || {
+            echo "::error::promote-image: ${name}: no artifact ${image}@${digest} to tag"; exit 1; }
           promoted=$(crane digest "${image}:${TO}")
-          if [ "$built" != "$promoted" ]; then
-            echo "::error::promote-image: ${name}: promotion changed the digest: $built → $promoted"; exit 1
+          if [ "$digest" != "$promoted" ]; then
+            echo "::error::promote-image: ${name}: promotion changed the digest: $digest → $promoted"; exit 1
           fi
-          echo "${image}:${TO} → ${built} (built for ${FROM})" | tee -a "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
-          out+=("$(printf '%s\t%s\t%s' "$name" "$image" "$built")")
+          echo "${image}:${TO} → ${promoted}" | tee -a "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
+          out+=("$(printf '%s\t%s\t%s' "$name" "$image" "$promoted")")
         done 3<<< "$list"
 
-        images=$(printf '%s\n' "${out[@]}" | jq -Rnc \
-          '[inputs | split("\t") | {name: .[0], image: .[1], ref: "\(.[1])@\(.[2])", digest: .[2]}]')
+        images=$(printf '%s\n' "${out[@]}" | artifact_list)
         echo "images=${images}" >> "$GITHUB_OUTPUT"
