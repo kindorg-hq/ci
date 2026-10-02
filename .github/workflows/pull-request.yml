@@ -14,13 +14,15 @@
 #       permissions: {contents: read, pull-requests: read}
 #       with:
 #         images: '[{"name": "pepic"}]'      # context ".", dockerfile "Dockerfile"
+#         test-compose: compose.test.yml     # optional: tests that need a database
 #
 # The run reads "PR #12: feat(#7): …" (run-name sits in the caller: a called
 # workflow's own is ignored); its graph is `ci / Build` → `ci / Accept`, the
 # two checks the service's ruleset requires.
 #   Build   the Dockerfile's `test` stage (when it has one), then each image,
-#           loaded locally under its address (nothing pushed) — tests or image
-#           fails Build.
+#           loaded locally under its address (nothing pushed), then the
+#           compose tests against those images (test-compose, when given) —
+#           tests or image fails Build.
 #   Accept  each its own step, all run even when one fails, the failing one
 #           named: image scan (Trivy, CRITICAL with a fix), PR title names its
 #           change and work item, no secrets in the change (gitleaks), no
@@ -42,6 +44,13 @@ on:
         description: 'JSON list of {"name", "context", "dockerfile"}; context defaults to ".", dockerfile to "Dockerfile"; "[]" for none'
         type: string
         required: true
+      test-compose:
+        description: >
+          Path to a compose file whose service `test` runs the tests that need
+          other services (a database) against the images just built, each
+          given as IMAGE_<NAME> (README, "Tests that need a database"); "" for none
+        type: string
+        default: ""
       runner:
         description: Runner for the image builds and scans (the cluster is arm64)
         type: string
@@ -92,6 +101,12 @@ jobs:
         uses: ./.kindorg-ci/actions/build-image
         with:
           images: ${{ inputs.images }}
+      - name: Compose tests (${{ inputs.test-compose }}) against the built images
+        if: inputs.test-compose != '' && inputs.images != '[]'
+        uses: ./.kindorg-ci/actions/test-compose
+        with:
+          compose-file: ${{ inputs.test-compose }}
+          images: ${{ steps.build.outputs.images }}
       # hand the images to Accept
       - name: Save the images for Accept
         if: inputs.images != '[]'
