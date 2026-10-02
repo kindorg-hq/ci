@@ -63,8 +63,10 @@ Where a merged PR is, from its page or `gh`:
 ## When a delivery goes wrong
 
 - **Re-deliver the latest Release** (a delivery died on the way):
-  `gh workflow run pipeline.yml` in the service repo. It promotes the existing
-  Artifact again and never rebuilds; it cannot deliver an older version.
+  `gh workflow run redeliver.yml` in the service repo (v3 services:
+  `gh workflow run pipeline.yml`). It promotes the existing Artifact again and
+  never rebuilds; it cannot deliver an older version. A version already
+  recorded changes nothing, and a Release already running stays running.
 - **Fix forward.** A bad Release is fixed by the next one: a `fix(#N)` PR,
   merged when green.
 - **Break-glass** (a manual revert in homelab-k8s) is the human's call, never
@@ -78,7 +80,10 @@ the next release of this repo. Each PR runs `self-test.yml`: the Checks, v4's `p
 artifact path with a dry-run Release and promotion, the list form of the
 image actions (two fixture images in one job), the report dry run, the
 no-downgrade cases, the Application annotation cases, actionlint, and
-v4's `ship.yml` on the fixture with a dry-run Release. Show
+v4's `ship.yml` on the fixture with a dry-run Release, and v4's `redeliver.yml`
+as a dry run of this repo's latest Release. `ship.yml` and `redeliver.yml`
+share their Deliver steps from promote to report, kept the same in both files
+(self-test fails when they drift): change both. Show
 new behaviour there as a dry run when it would otherwise write somewhere. A change to an input or output of a
 reusable workflow or action is breaking (`!`).
 
