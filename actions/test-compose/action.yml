@@ -62,12 +62,16 @@ runs:
           grep -qxF "$ref" <<< "$used" || echo "::notice::test-compose: no service runs ${ref} as its image (a build FROM it is fine)"
         done
 
-        # images pulled (missing ones only: on a pull request the image is
-        # local and must stay so) and test images built first, apart, so the
+        # the images under test pulled by digest (ship; on a pull request
+        # they are local and must stay so — compose pull would look them up
+        # in the registry even with --policy missing), the other services'
+        # images and test images built FROM them made ready, apart, so the
         # summary's lines are the tests'
         echo "::group::pull and build"
-        "${compose[@]}" pull --policy missing --ignore-buildable
-        "${compose[@]}" build
+        for ref in "${refs[@]}"; do
+          [[ $ref != *@sha256:* ]] || docker pull --quiet "$ref"
+        done
+        "${compose[@]}" create --quiet-pull --build --no-recreate
         echo "::endgroup::"
 
         log=$(mktemp)
