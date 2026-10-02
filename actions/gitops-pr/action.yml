@@ -2,7 +2,9 @@ name: GitOps PR
 description: >
   Record a release in the GitOps repo through a pull request: refuse a version
   lower than the one recorded (no-downgrade.sh), pin each image
-  by digest, label the resources with the version, open a PR, wait for the
+  by digest, label the resources with the version, write the release commit
+  on the app's ArgoCD Application (annotate-app.sh: the kindorg.dev
+  annotations ArgoCD reports "running" with), open a PR, wait for the
   manifest checks, merge. ArgoCD rolls out what lands on main.
   The repo is private on the free plan, so GitHub cannot require the checks
   or auto-merge — this action waits for them and merges itself.
@@ -18,6 +20,19 @@ inputs:
     required: true
   release-url:
     description: Link to the service release, for the PR body
+    default: ""
+  source-sha:
+    description: >
+      The release commit, full SHA. Written with source-repo, version, images
+      and environment-url as kindorg.dev/* annotations on apps/<app>.yaml,
+      for ArgoCD to report running / degraded on that commit. Empty: no
+      annotations (ArgoCD then reports to Telegram only).
+    default: ""
+  source-repo:
+    description: URL of the service repo, for kindorg.dev/source-repo
+    default: ${{ github.server_url }}/${{ github.repository }}
+  environment-url:
+    description: Where the service answers, for kindorg.dev/environment-url (optional)
     default: ""
   app-id:
     description: GitHub App id (kindorg-ci)
@@ -96,7 +111,33 @@ runs:
         # selectors: a Deployment's selector is immutable
         kustomize edit add label --without-selector --include-templates -f "app.kubernetes.io/version:${VERSION}"
         kustomize build . > /dev/null
-        git diff --stat
+
+    # The Release on the Application, for ArgoCD Notifications (homelab-k8s
+    # README, Notifications): which repo and commit to report running on,
+    # and which images must be running before it does.
+    - id: annotate
+      if: inputs.source-sha != ''
+      shell: bash
+      working-directory: .gitops
+      env:
+        APP: ${{ inputs.app }}
+        OWNER: ${{ github.repository_owner }}
+        IMAGES_JSON: ${{ inputs.images }}
+        SOURCE_REPO: ${{ inputs.source-repo }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        VERSION: ${{ inputs.version }}
+        ENVIRONMENT_URL: ${{ inputs.environment-url }}
+      run: |
+        set -euo pipefail
+        jq() { docker run --rm -i ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486 "$@"; }
+        # as kustomize pins them, so as the pods run them
+        IMAGES=$(echo "$IMAGES_JSON" | jq -r --arg o "${OWNER,,}" '[.[] | "ghcr.io/\($o)/\(.name)@\(.digest)"] | join(" ")')
+        export IMAGES
+        bash "$GITHUB_ACTION_PATH/annotate-app.sh" "apps/${APP}.yaml" "$APP"
+
+    - shell: bash
+      working-directory: .gitops
+      run: git diff --stat
 
     - id: pr
       shell: bash
@@ -108,6 +149,7 @@ runs:
         VERSION: ${{ inputs.version }}
         IMAGES: ${{ inputs.images }}
         RELEASE_URL: ${{ inputs.release-url }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
         SLUG: ${{ steps.token.outputs.app-slug }}
         TIMEOUT: ${{ inputs.checks-timeout }}
       run: |
@@ -124,8 +166,10 @@ runs:
         git switch -c "$branch"
         git commit -qam "deploy(${APP}): ${VERSION}"
         git push -q --force origin "$branch"
-        body=$(printf 'Release %s of %s.\n\n%s\n\nImages (pinned by digest):\n%s\n\nOpened by the delivery pipeline; it merges this PR once the manifest checks pass.' \
-          "$VERSION" "$APP" "$RELEASE_URL" "$(echo "$IMAGES" | jq -r '.[] | "- `\(.name)@\(.digest)`"')")
+        note="No release annotations on the Application: ArgoCD reports this one to Telegram only."
+        [ -z "$SOURCE_SHA" ] || note="\`apps/${APP}.yaml\` carries the release (\`kindorg.dev/*\` annotations, commit \`${SOURCE_SHA}\`): ArgoCD reports it running or degraded on GitHub."
+        body=$(printf 'Release %s of %s.\n\n%s\n\nImages (pinned by digest):\n%s\n\n%s\n\nOpened by the delivery pipeline; it merges this PR once the manifest checks pass.' \
+          "$VERSION" "$APP" "$RELEASE_URL" "$(echo "$IMAGES" | jq -r '.[] | "- `\(.name)@\(.digest)`"')" "$note")
         # a re-delivery after a failure reuses the PR the failed run opened
         n=$(gh api "repos/${REPO}/pulls?head=${REPO%%/*}:${branch}&state=open" --jq '.[0].number // empty')
         if [ -n "$n" ]; then

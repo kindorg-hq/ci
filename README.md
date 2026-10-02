@@ -38,12 +38,14 @@ default branch
   golden-path / deliver / deliver / Deliver: promote and re-scan (pepic)
       :<commit-sha> → :X.Y.Z on the same digest (nothing rebuilt), Trivy again
   golden-path / deliver / deliver / Deliver: record pepic X.Y.Z in homelab-k8s
-      GitOps PR: no downgrade, pin by digest, label the version, wait for checks, merge
+      GitOps PR: no downgrade, pin by digest, label the version, release commit on
+      the Application (kindorg.dev annotations), wait for checks, merge
   golden-path / deliver / deliver / Deliver: report on the PRs in X.Y.Z
       PRs: `released` label + "recorded" comment; `production` deployment in_progress
         │
         ▼      homelab-k8s, not this repo
-  ArgoCD syncs → comment "running" / "degraded", deployment success / failure → Telegram
+  ArgoCD syncs → comment "running" / "degraded", deployment success / failure (as the
+  kindorg-argocd App) → Telegram
 
 workflow_dispatch (re-deliver the latest Release; no Build, nothing rebuilt):
   golden-path / deliver / Deliver: find the latest release
@@ -67,16 +69,16 @@ the Artifact built and scanned on merge. A Release only adds a tag to its digest
 | `.github/workflows/release-and-deliver.yml` | The Deliver stage as one unit: `Deliver: cut release` (push) or `Deliver: find the latest release` (workflow_dispatch), then `deliver.yml`. Not called by services directly. |
 | `.github/workflows/deliver.yml` | Deliver a Release without building: promote and re-scan each image, record it in homelab-k8s, report on the PRs. |
 | `.github/workflows/release.yml` | release-please. In v3 only `release.self.yml` uses it, for this repo's own releases; services no longer do (callers on `@v2` read the v2 tag's copy). |
-| `.github/workflows/self-test.yml` | This repo's PR checks: the Checks and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the report dry run, the no-downgrade cases, actionlint. |
+| `.github/workflows/self-test.yml` | This repo's PR checks: the Checks and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the report dry run, the no-downgrade cases, the Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `actions/build-image` | Build one image with buildx for linux/arm64; builds the Dockerfile's `test` stage first when it has one. On PRs loads it locally; on merge pushes `:<commit-sha>`. |
 | `actions/scan-image` | Trivy as a pinned container; fails on the given severity (CRITICAL) with a fix available. |
 | `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change. `dry-run` tags nothing. |
 | `actions/promote-image` | Add the version tag to the Artifact of a commit with crane; fails if the digest changed. |
-| `actions/gitops-pr` | Open, wait for and merge the PR to `manifests/<app>/base` in homelab-k8s: digests pinned, `app.kubernetes.io/version` label. Refuses a lower version first (`no-downgrade.sh`, cases in `no-downgrade.test.sh`). |
+| `actions/gitops-pr` | Open, wait for and merge the PR to `manifests/<app>/base` and `apps/<app>.yaml` in homelab-k8s: digests pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`, cases in `annotate-app.test.sh`). Refuses a lower version first (`no-downgrade.sh`, cases in `no-downgrade.test.sh`). |
 | `actions/report-delivery` | `released` label and one "recorded" comment on every PR of the Release; `production` deployment of the release commit, `in_progress`. |
 | `fixtures/hello` | The smallest service (with a `test` stage) that self-test runs the path on. |
-| `fixtures/gitops` | A GitOps repo stand-in for the no-downgrade cases. |
+| `fixtures/gitops` | A GitOps repo stand-in for the no-downgrade and annotation cases. |
 | `release-please-config.json`, `.release-please-manifest.json`, `CHANGELOG.md` | This repo's release-please state. |
 
 ## Connect a service
@@ -114,7 +116,9 @@ Before the first merge:
   sees the org variable `KINDORG_CI_APP_ID` and the org secret
   `KINDORG_CI_APP_KEY`; `secrets: inherit` passes the secret on.
 - **homelab-k8s has `manifests/<app>/base/kustomization.yaml`** naming the
-  images as `ghcr.io/<owner>/<name>`.
+  images as `ghcr.io/<owner>/<name>`, and **`apps/<app>.yaml`**, the
+  Application named `<app>` (the GitOps PR annotates it; without it Deliver
+  fails before opening the PR).
 - **The ghcr package lets the repo write**: a new package is created by the
   first push; an existing one must give the repo's Actions write access.
 - **Merge settings**: squash only, PR title as the commit message. The title
@@ -171,16 +175,29 @@ secrets, which the PR path does not need.
   recorded: every PR in it (the PRs of its commits since the previous Release)
   gets the `released` label and one comment "vX.Y.Z recorded" linking the
   GitHub Release and the GitOps PR, and the release commit gets a GitHub
-  Deployment to `production` in state `in_progress`. ArgoCD then edits that
-  comment on the release commit's PR into "running" or "degraded" and sets the
-  deployment to `success` or `failure`. The `production` deployment is the
+  Deployment to `production` in state `in_progress`. That is where the
+  pipeline stops. **Recorded → running is ArgoCD's**, not this repo's: when
+  the app is synced, healthy and runs the Release's images, ArgoCD
+  Notifications (as the `kindorg-argocd` GitHub App) edit that comment on the
+  release commit's PR into "running" and set the deployment to `success`; on
+  Degraded, "degraded" and `failure`. The `production` deployment is the
   source of truth; recorded is not delivered. A re-delivery edits the comment,
-  never adds one.
+  never adds one. Configuration, the App and its key:
+  [homelab-k8s README, Notifications](https://github.com/kindorg-hq/homelab-k8s#notifications-telegram-and-github).
 - **The comment tag is shared with homelab-k8s.** The comment carries
   `<!-- argocd-notifications delivery -->`: ArgoCD Notifications'
   `pullRequestComment` with `commentTag: delivery` finds it by that marker and
   edits it in place; it finds the deployment by the release commit's full SHA
   (`ref`) and `environment: production`. Change one side, change both.
+- **The Release is written on the Application.** ArgoCD knows the GitOps
+  commit, not the service's. So the GitOps PR also annotates
+  `apps/<app>.yaml` in homelab-k8s (its app-of-apps syncs it):
+  `kindorg.dev/source-repo` (the service repo URL), `kindorg.dev/source-sha`
+  (the release commit, full SHA), `kindorg.dev/version`, `kindorg.dev/images`
+  (the pinned `ghcr.io/…@sha256:…`, space separated; ArgoCD waits until the
+  pods run exactly these) and `kindorg.dev/environment-url` (the service's
+  `url`). The notification templates read them; also a contract, change both
+  sides together.
 - **Fix forward.** No rollback in the pipeline. Break-glass is a manual revert
   in homelab-k8s, described in its README.
 - **Deliveries never overtake each other.** Two quick merges must not cut the

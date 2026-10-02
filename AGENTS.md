@@ -43,6 +43,13 @@ Where a merged PR is, from its page or `gh`:
 - `released` label — in a Release; the comment names it:
   - "vX.Y.Z recorded" — in homelab-k8s, not yet running;
   - "running" / "degraded" — ArgoCD's word, on the release commit's PR.
+    The pipeline's work ends at recorded; recorded → running is ArgoCD
+    Notifications in homelab-k8s (the `kindorg-argocd` App), configured in
+    `bootstrap/argocd/notifications.yaml` there, from the `kindorg.dev/*`
+    annotations the GitOps PR writes on `apps/<app>.yaml`. A comment stuck at
+    recorded is a cluster question: `kubectl -n argocd logs
+    deploy/argocd-notifications-controller` (homelab-k8s README,
+    Notifications).
 - The source of truth is the release commit's `production` deployment:
   `in_progress` = recorded, `success` = running, `failure` = degraded.
 
@@ -67,8 +74,8 @@ Services follow the major tag `@v3`, so a change here reaches all of them at
 the next release of this repo. Each PR runs `self-test.yml`: the Checks and
 `golden-path.yml` against `fixtures/hello` with the PR's own actions, the
 artifact path with a dry-run Release and promotion, the report dry run, the
-no-downgrade cases, and actionlint. Show new behaviour there as a dry run
-when it would otherwise write somewhere. A change to an input or output of a
+no-downgrade cases, the Application annotation cases, and actionlint. Show
+new behaviour there as a dry run when it would otherwise write somewhere. A change to an input or output of a
 reusable workflow or action is breaking (`!`).
 
 This repo is the exception to "a merge ships": merging to main only updates
