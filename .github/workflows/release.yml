@@ -7,12 +7,20 @@
 #     uses: kindorg-hq/ci/.github/workflows/release.yml@v2
 #     secrets: inherit
 #
+# With auto-merge: true (services) the release PR merges itself once its checks
+# are green: a merge to main ships. Without it (this repo) a human merges it.
+#
 # It runs as the kindorg-ci GitHub App, not GITHUB_TOKEN: a PR opened with
 # GITHUB_TOKEN would not trigger the checks on the release PR.
 name: release
 
 on:
   workflow_call:
+    inputs:
+      auto-merge:
+        description: Merge the release PR when its checks pass — a merge to main ships
+        type: boolean
+        default: false
     outputs:
       released:
         description: '"true" when this push created a release'
@@ -53,3 +61,13 @@ jobs:
           token: ${{ steps.token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      # idempotent: on every push, (re)arm auto-merge on the open release PR
+      - if: inputs.auto-merge && steps.rp.outputs.release_created != 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          for n in $(gh pr list --repo "$GITHUB_REPOSITORY" --label "autorelease: pending" --state open --json number --jq '.[].number'); do
+            gh pr merge "$n" --repo "$GITHUB_REPOSITORY" --auto --squash
+            echo "Release PR #$n merges when its checks pass" >> "$GITHUB_STEP_SUMMARY"
+          done
