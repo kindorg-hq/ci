@@ -1,13 +1,8 @@
-# Build and Accept the artifact — once, on every merge to the main branch. Each image is
-# pushed tagged with the commit SHA and scanned. A Release later promotes this
-# exact image (deliver.yml); nothing is rebuilt after this point.
-#
-#   build:
-#     if: github.event_name == 'push'
-#     uses: kindorg-hq/ci/.github/workflows/build.yml@v2
-#     permissions: {contents: read, packages: write}
-#     with:
-#       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
+# Build and Accept the Artifact — once, on every merge to the default branch.
+# Each image runs its Dockerfile's `test` stage, is pushed tagged with the
+# commit SHA and scanned. A Release later promotes this exact image
+# (deliver.yml); nothing is rebuilt after this point. golden-path.yml calls it
+# on push; services do not call it directly.
 name: build
 
 on:

@@ -22,7 +22,7 @@ inputs:
     description: "true: push to ghcr; false: load into the local docker"
     default: "false"
   version:
-    description: Release version to tag (empty on pull requests)
+    description: Version to tag as well when pushing; the golden path leaves it empty (a Release promotes, deliver.yml)
     default: ""
   token:
     description: Token with packages:write (only when pushing)
