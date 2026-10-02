@@ -18,6 +18,7 @@
 #
 # Only these five keys are touched; everything else in the file stays as it
 # is. yq is a digest-pinned container. self-test runs annotate-app.test.sh.
+# Internal to record.sh (step 4), which is what the GitOps PR calls.
 set -euo pipefail
 
 file=${1:?usage: annotate-app.sh <application file> <app>}

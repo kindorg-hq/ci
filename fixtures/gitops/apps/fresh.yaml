@@ -1,0 +1,16 @@
+# fresh's ArgoCD Application, never annotated yet: a first delivery writes
+# the kindorg.dev annotations (record.sh, self-test).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fresh
+  namespace: argocd
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/kindorg-hq/homelab-k8s.git
+    targetRevision: main
+    path: manifests/fresh/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: public

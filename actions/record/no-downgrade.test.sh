@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cases for no-downgrade.sh against fixtures/gitops (hello records 1.4.0,
 # fresh records nothing). Runs in self-test and locally:
-#   actions/gitops-pr/no-downgrade.test.sh
+#   actions/record/no-downgrade.test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)

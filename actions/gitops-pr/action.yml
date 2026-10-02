@@ -1,13 +1,16 @@
 name: GitOps PR
 description: >
-  Record a release in the GitOps repo through a pull request: refuse a version
-  lower than the one recorded (no-downgrade.sh), pin each image
-  by digest, label the resources with the version, write the release commit
-  on the app's ArgoCD Application (annotate-app.sh: the kindorg.dev
-  annotations ArgoCD reports "running" with), open a PR, wait for the
-  manifest checks, merge. ArgoCD rolls out what lands on main.
-  The repo is private on the free plan, so GitHub cannot require the checks
-  or auto-merge — this action waits for them and merges itself.
+  Record a Release in the GitOps repo through a pull request. The recording
+  itself — no downgrade, pin by digest, version label, the Release on the
+  Application, and the check that the rendered manifests run every
+  image@digest — is actions/record/record.sh, on a checkout; this action is
+  its GitHub adapter: a token for the GitOps repo, the checkout, then a
+  branch, a PR (an open one of an earlier attempt reused), the manifest
+  checks waited for through the REST API, the merge. ArgoCD rolls out what
+  lands on main. The repo is private on the free plan, so GitHub cannot
+  require the checks or auto-merge — this action waits for them and merges
+  itself. In a dry run the token can only read, the checkout keeps no
+  credentials and nothing is pushed: it prints the diff it would record.
 inputs:
   app:
     description: Application directory under manifests/ (e.g. pepic)
@@ -48,9 +51,20 @@ inputs:
   checks-timeout:
     description: Seconds to wait for the manifest checks
     default: "600"
+  dry-run:
+    description: >
+      "true": record on a read-only checkout and print the diff; no branch,
+      no PR, nothing pushed (self-test)
+    default: "false"
 outputs:
+  changed:
+    description: '"true" when the Release was not recorded yet (the checkout changed), "false" when it already was'
+    value: ${{ steps.record.outputs.changed }}
+  diff:
+    description: What the recording changes in the GitOps repo (git diff); empty when nothing
+    value: ${{ steps.record.outputs.diff }}
   pr-url:
-    description: The merged GitOps PR
+    description: The merged GitOps PR; empty when nothing changed and in a dry run
     value: ${{ steps.pr.outputs.url }}
 runs:
   using: composite
@@ -63,7 +77,8 @@ runs:
         echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
         echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
 
-    # a token for the GitOps repo only, valid for an hour
+    # a token for the GitOps repo only, valid for an hour; in a dry run it
+    # can only read
     - id: token
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
@@ -71,74 +86,47 @@ runs:
         private-key: ${{ inputs.private-key }}
         owner: ${{ steps.target.outputs.owner }}
         repositories: ${{ steps.target.outputs.name }}
+        permission-contents: ${{ inputs.dry-run == 'true' && 'read' || '' }}
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ inputs.gitops-repo }}
         token: ${{ steps.token.outputs.token }}
         path: .gitops
-        persist-credentials: true
+        persist-credentials: ${{ inputs.dry-run != 'true' }}
 
-    # Never backwards: an older run that finishes after a newer one must not
-    # roll Production back. Equal (re-delivery) and none yet (first delivery)
-    # pass; the rule lives in no-downgrade.sh, tested by self-test.
-    - id: no-downgrade
+    # The recording, all of it on files (actions/record/record.sh): refused
+    # when lower than the recorded version, failed when the rendered
+    # manifests would not run every image@digest. Its stdout is the diff.
+    - id: record
       shell: bash
-      working-directory: .gitops
       env:
         APP: ${{ inputs.app }}
-        VERSION: ${{ inputs.version }}
-      run: 'bash "$GITHUB_ACTION_PATH/no-downgrade.sh" "manifests/${APP}/base" "$VERSION"'
-
-    - id: edit
-      shell: bash
-      working-directory: .gitops/manifests/${{ inputs.app }}/base
-      env:
         VERSION: ${{ inputs.version }}
         IMAGES: ${{ inputs.images }}
-      run: |
-        set -euo pipefail
-        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
-        # tools pinned by digest, not whatever the runner image ships
-        kustomize() { docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-          registry.k8s.io/kustomize/kustomize:v5.8.1@sha256:899fcd3bc898160e62bcaf82932b0cb29ba38d16272353db2e7acbba82129429 "$@"; }
-        refs=$(artifact_refs gitops-pr "$IMAGES" digest)
-        kustomize version
-        for ref in $refs; do
-          kustomize edit set image "$ref"
-        done
-        # version as a label on resources and pod templates, never on
-        # selectors: a Deployment's selector is immutable
-        kustomize edit add label --without-selector --include-templates -f "app.kubernetes.io/version:${VERSION}"
-        kustomize build . > /dev/null
-
-    # The Release on the Application, for ArgoCD Notifications (homelab-k8s
-    # README, Notifications): which repo and commit to report running on,
-    # and which images must be running before it does.
-    - id: annotate
-      if: inputs.source-sha != ''
-      shell: bash
-      working-directory: .gitops
-      env:
-        APP: ${{ inputs.app }}
-        IMAGES_JSON: ${{ inputs.images }}
         SOURCE_REPO: ${{ inputs.source-repo }}
         SOURCE_SHA: ${{ inputs.source-sha }}
-        VERSION: ${{ inputs.version }}
         ENVIRONMENT_URL: ${{ inputs.environment-url }}
+        DRY_RUN: ${{ inputs.dry-run }}
       run: |
         set -euo pipefail
-        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
-        # as kustomize pins them, so as the pods run them
-        IMAGES=$(artifact_refs gitops-pr "$IMAGES_JSON" digest | paste -sd ' ' -)
-        export IMAGES
-        bash "$GITHUB_ACTION_PATH/annotate-app.sh" "apps/${APP}.yaml" "$APP"
-
-    - shell: bash
-      working-directory: .gitops
-      run: git diff --stat
+        diff=$(bash "$GITHUB_ACTION_PATH/../record/record.sh" .gitops "$APP")
+        changed=false; [ -z "$diff" ] || changed=true
+        eof="EOF_$(openssl rand -hex 8)"
+        { echo "changed=$changed"; echo "diff<<$eof"; [ -z "$diff" ] || printf '%s\n' "$diff"; echo "$eof"; } >> "$GITHUB_OUTPUT"
+        [ -z "$diff" ] || printf '%s\n' "$diff"
+        [ "$DRY_RUN" = true ] || exit 0
+        at=$(git -C .gitops rev-parse --short HEAD)
+        notes=${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}
+        if [ "$changed" = true ]; then
+          printf 'Dry run: %s %s would be recorded in homelab-k8s (at `%s`) with this diff; nothing pushed.\n\n```diff\n%s\n```\n' \
+            "$APP" "$VERSION" "$at" "$diff" >> "$notes"
+        else
+          echo "Dry run: homelab-k8s (at \`${at}\`) already records ${APP} ${VERSION}: no diff, nothing pushed." >> "$notes"
+        fi
 
     - id: pr
+      if: inputs.dry-run != 'true'
       shell: bash
       working-directory: .gitops
       env:
@@ -150,12 +138,13 @@ runs:
         RELEASE_URL: ${{ inputs.release-url }}
         SOURCE_SHA: ${{ inputs.source-sha }}
         SLUG: ${{ steps.token.outputs.app-slug }}
+        CHANGED: ${{ steps.record.outputs.changed }}
         TIMEOUT: ${{ inputs.checks-timeout }}
       run: |
         set -euo pipefail
         jq() { docker run --rm -i ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486 "$@"; }
         source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
-        if git diff --quiet; then
+        if [ "$CHANGED" != true ]; then
           echo "Manifests already at ${APP} ${VERSION}, nothing to deliver"
           exit 0
         fi

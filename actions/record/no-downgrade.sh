@@ -5,11 +5,12 @@
 #
 #   no-downgrade.sh <dir with kustomization.yaml> <version to record>
 #
-# The current version is the app.kubernetes.io/version label that gitops-pr
+# The current version is the app.kubernetes.io/version label that record.sh
 # writes into the kustomization (labels[].pairs). Equal is allowed
 # (re-delivery), no label is allowed (first delivery). Versions are SemVer; a
 # leading "v" is ignored, build metadata (+...) does not count.
-# Plain bash, no GitHub: self-test runs it against fixtures/gitops.
+# Plain bash, no GitHub: self-test runs it against fixtures/gitops. Internal
+# to record.sh (step 1), which is what the GitOps PR calls.
 set -euo pipefail
 export LC_ALL=C  # ASCII order for pre-release identifiers
 

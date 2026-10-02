@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cases for annotate-app.sh against fixtures/gitops/apps/hello.yaml (a copy).
 # Runs in self-test and locally (needs docker):
-#   actions/gitops-pr/annotate-app.test.sh
+#   actions/record/annotate-app.test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)

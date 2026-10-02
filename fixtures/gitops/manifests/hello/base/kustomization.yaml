@@ -1,5 +1,5 @@
-# What gitops-pr leaves behind after recording hello 1.4.0: the guard reads
-# app.kubernetes.io/version from here (self-test, no-downgrade).
+# What record.sh leaves behind after recording hello 1.4.0: the guard reads
+# app.kubernetes.io/version from here (self-test: no-downgrade, record).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
