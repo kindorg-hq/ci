@@ -9,7 +9,14 @@ description: >
   under the image's address, for scanning); on merge it pushes the commit tag
   to ghcr and returns the digest. The first image that fails stops the step,
   named in the error. Its output is the Artifact list
-  (actions/artifact/artifact.sh), made here.
+  (actions/artifact/artifact.sh), made here. Cache: every build reads
+  `ghcr.io/<owner>/<name>:buildcache` (anonymously on a pull request, so the
+  package must be public) and this ref's GitHub Actions cache; a merge
+  (push) writes the registry cache, mode=max, a pull request writes only its
+  own GitHub Actions cache (README, "How Build caches"). Only a push to the
+  default branch with `push: "true"` writes the registry cache — decided from
+  the run's event, not an input, so no pull request can write a cache a merge
+  reads.
 inputs:
   images:
     description: >
@@ -61,6 +68,9 @@ runs:
         IMAGES: ${{ inputs.images }}
         PLATFORM: ${{ inputs.platform }}
         PUSH: ${{ inputs.push }}
+        # the trust boundary of the registry cache (not an input: a PR
+        # controls its caller): a merge's Build reads only what merges wrote
+        WRITE_CACHE: ${{ inputs.push == 'true' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         SOURCE: ${{ github.server_url }}/${{ github.repository }}
         JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
       run: |
@@ -78,14 +88,29 @@ runs:
           fail() { echo "::error::build-image: ${name}: $1"; exit 1; }
           [ -f "$dockerfile" ] || fail "no Dockerfile at ${dockerfile}"
 
+          # Cache. A merge writes every stage's layers to the registry, and
+          # every build — the next merge, any PR — reads them: GitHub Actions
+          # caches are per ref, so one a PR writes is never read by its merge
+          # or by another PR. Any other build (a PR) writes only its own ref's
+          # GitHub Actions cache, for its next push — never one a merge reads.
+          # Missing or unreadable (first build, private package): the import
+          # logs an error and the build goes on uncached.
+          cache="${image}:buildcache"
+          from=(--cache-from "type=registry,ref=${cache}" --cache-from "type=gha,scope=${name}")
+          if [ "$WRITE_CACHE" = "true" ]; then
+            test_to=()
+            image_to=(--cache-to "type=registry,ref=${cache},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true")
+          else
+            test_to=(--cache-to "type=gha,mode=max,scope=${name}-test,ignore-error=true")
+            image_to=(--cache-to "type=gha,mode=max,scope=${name},ignore-error=true")
+          fi
+
           # the service's tests: a stage named `test` in its Dockerfile
           if grep -qiE '^[[:space:]]*FROM[[:space:]].*[[:space:]]AS[[:space:]]+test[[:space:]]*$' "$dockerfile"; then
             echo "::group::${name}: test stage"
             docker buildx build "$context" --file "$dockerfile" --target test \
               --platform "$PLATFORM" --output type=cacheonly \
-              --cache-from "type=gha,scope=${name}" \
-              --cache-from "type=gha,scope=${name}-test" \
-              --cache-to "type=gha,mode=max,scope=${name}-test,ignore-error=true" \
+              "${from[@]}" --cache-from "type=gha,scope=${name}-test" "${test_to[@]}" \
               || fail "\`test\` stage failed (${dockerfile})"
             echo "::endgroup::"
             echo "**${name}:** \`test\` stage passed." >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
@@ -107,8 +132,7 @@ runs:
             --platform "$PLATFORM" "${tags[@]}" "${output[@]}" \
             --label "org.opencontainers.image.source=${SOURCE}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --cache-from "type=gha,scope=${name}" \
-            --cache-to "type=gha,mode=max,scope=${name},ignore-error=true" \
+            "${from[@]}" "${image_to[@]}" \
             --metadata-file "${meta}/${name}.json" \
             || fail "image build failed (${dockerfile})"
           echo "::endgroup::"
