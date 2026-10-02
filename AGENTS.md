@@ -73,8 +73,8 @@ Where a merged PR is, from its page or `gh`:
 ## Changing this repo (kindorg-hq/ci)
 
 Services follow the major tag `@v3`, so a change here reaches all of them at
-the next release of this repo. Each PR runs `self-test.yml`: the Checks and
-`golden-path.yml` against `fixtures/hello` with the PR's own actions, the
+the next release of this repo. Each PR runs `self-test.yml`: the Checks, v4's `pr.yml` (job
+`ci`) and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the
 artifact path with a dry-run Release and promotion, the list form of the
 image actions (two fixture images in one job), the report dry run, the
 no-downgrade cases, the Application annotation cases, and actionlint. Show
