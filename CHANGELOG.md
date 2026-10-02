@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/kindorg-hq/ci/compare/v2.1.0...v2.2.0) (2026-10-02)
+
+
+### Features
+
+* **#11:** a merge to main ships; delivered PRs say so ([#12](https://github.com/kindorg-hq/ci/issues/12)) ([f941c7f](https://github.com/kindorg-hq/ci/commit/f941c7f19d774091580bde45dfa1df52a36a589c))
+
 ## [2.1.0](https://github.com/kindorg-hq/ci/compare/v2.0.0...v2.1.0) (2026-10-02)
 
 
