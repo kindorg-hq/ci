@@ -1,0 +1,70 @@
+# Build the artifact — once, on every merge to the main branch. Each image is
+# pushed tagged with the commit SHA and scanned. A Release later promotes this
+# exact image (deliver.yml); nothing is rebuilt after this point.
+#
+#   build:
+#     if: github.event_name == 'push'
+#     uses: kindorg-hq/ci/.github/workflows/build.yml@v2
+#     permissions: {contents: read, packages: write}
+#     with:
+#       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: 'JSON list of {"name", "context", "dockerfile"}'
+        type: string
+        required: true
+      runner:
+        type: string
+        default: ubuntu-24.04-arm
+      trivy-severity:
+        type: string
+        default: CRITICAL
+      ci-ref:
+        type: string
+        default: v2
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build artifact (${{ matrix.image.name }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      - id: build
+        uses: ./.kindorg-ci/actions/build-image
+        with:
+          name: ${{ matrix.image.name }}
+          context: ${{ matrix.image.context || '.' }}
+          dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
+          push: "true"
+          token: ${{ github.token }}
+      - uses: ./.kindorg-ci/actions/scan-image
+        with:
+          ref: ${{ steps.build.outputs.ref }}
+          severity: ${{ inputs.trivy-severity }}
+          token: ${{ github.token }}

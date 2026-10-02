@@ -4,7 +4,7 @@
 #
 #   release:
 #     if: github.event_name == 'push'
-#     uses: kindorg-hq/ci/.github/workflows/release.yml@v1
+#     uses: kindorg-hq/ci/.github/workflows/release.yml@v2
 #     secrets: inherit
 #
 # It runs as the kindorg-ci GitHub App, not GITHUB_TOKEN: a PR opened with
@@ -34,6 +34,7 @@ jobs:
   release-please:
     # API-only: a single-CPU unprivileged container is enough
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     outputs:
       released: ${{ steps.rp.outputs.release_created || 'false' }}
       version: ${{ steps.rp.outputs.version }}

@@ -4,13 +4,19 @@ The golden path from a pull request to the home cluster, shared by every
 service of kindorg-hq. Terms: [CONTEXT.md](CONTEXT.md).
 
 ```
-PR ──▶ checks.yml          title · secrets · dependencies · image builds and scans
-main ─▶ release.yml        release-please keeps a "release x.y.z" PR with the changelog
+PR ──▶ checks.yml          title · secrets · dependencies · image builds and scans (local)
+main ─▶ build.yml          the Artifact: built ONCE, pushed as :<commit-sha>, scanned
+        release.yml        release-please keeps a "release x.y.z" PR with the changelog
         merge release PR ─▶ tag vX.Y.Z + GitHub Release
-                            └▶ deliver.yml   build ▸ push ▸ scan ▸ PR to homelab-k8s
-                                             (digest + version label) ▸ checks ▸ merge
+                            └▶ deliver.yml   promote :<sha> → :x.y.z (same digest) ▸ re-scan
+                                             ▸ PR to homelab-k8s (digest + version label)
+                                             ▸ manifest checks ▸ merge
                                              └▶ ArgoCD rolls it out ▸ Telegram
 ```
+
+**Build once, promote.** The image that reaches the cluster is byte for byte
+the one built and scanned on merge. A release only adds a tag to its digest
+(`crane tag`; the digest is checked unchanged); nothing is rebuilt.
 
 The service keeps its own tests in its own workflow; everything after "tests
 are green" is here.
@@ -29,25 +35,33 @@ on:
 jobs:
   checks:
     if: github.event_name == 'pull_request'
-    uses: kindorg-hq/ci/.github/workflows/checks.yml@v1
+    uses: kindorg-hq/ci/.github/workflows/checks.yml@v2
+    with:
+      images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
+
+  build:
+    if: github.event_name == 'push'
+    uses: kindorg-hq/ci/.github/workflows/build.yml@v2
+    permissions: {contents: read, packages: write}
     with:
       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
 
   release:
     if: github.event_name == 'push'
-    uses: kindorg-hq/ci/.github/workflows/release.yml@v1
+    uses: kindorg-hq/ci/.github/workflows/release.yml@v2
     secrets: inherit
 
   deliver:
-    needs: release
+    needs: [build, release]
     if: needs.release.outputs.released == 'true'
-    uses: kindorg-hq/ci/.github/workflows/deliver.yml@v1
+    uses: kindorg-hq/ci/.github/workflows/deliver.yml@v2
+    permissions: {contents: read, packages: write}
     with:
       app: pepic
       version: ${{ needs.release.outputs.version }}
       ref: ${{ needs.release.outputs.tag }}
       release-url: ${{ needs.release.outputs.url }}
-      images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
+      images: '[{"name": "pepic"}]'
     secrets: inherit
 ```
 
@@ -77,7 +91,7 @@ Plus, in the service repo:
 ## Versioning of this repo
 
 Released by release-please like a service. Merging the release PR tags vX.Y.Z
-and only then moves `v1`, so `@v1` never points at unreleased code. Every PR
+and only then moves the major tag (`v2`), so `@v2` never points at unreleased code. `v1` is frozen: it rebuilt the image at release time. Every PR
 runs `self-test.yml`: the Checks against `fixtures/hello`, using the actions
 from the PR itself, plus actionlint.
 

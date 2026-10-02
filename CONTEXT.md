@@ -9,12 +9,16 @@ Cluster terms (Platform, Application) are defined in homelab-k8s/CONTEXT.md.
 What every pull request of a service must pass besides its own tests: a Conventional-Commit title, no secrets in the change, no vulnerable dependency added, the image builds and scans clean.
 _Avoid_: CI (too broad — the service's own tests are CI too), gates
 
+**Artifact**:
+The image built once, on merge to the main branch, tagged with its commit SHA and scanned. Identified by its digest. Nothing after the merge rebuilds it: a Release promotes this exact artifact.
+_Avoid_: build, image (an image can be rebuilt; an artifact is the one that was)
+
 **Release**:
 A version of a service, created by merging the release PR that release-please keeps open: a tag vX.Y.Z, a GitHub Release, a CHANGELOG entry. Only releases reach the cluster.
 _Avoid_: deploy (that is Delivery), build
 
 **Delivery**:
-Getting a Release into the cluster: images built from the release tag and pushed, scanned, then recorded in homelab-k8s by a pull request — pinned by digest, labelled with the version. ArgoCD rolls out what lands on main.
+Getting a Release into the cluster without building anything: the Artifact of the release commit is promoted (the version tag added to the same digest), re-scanned, and recorded in homelab-k8s by a pull request — pinned by digest, labelled with the version. ArgoCD rolls out what lands on main.
 _Avoid_: deploy job, push to prod
 
 **Fix forward**:
