@@ -50,7 +50,7 @@ runs:
         cliff() { docker run --rm -u "$(id -u):$(id -g)" --entrypoint git-cliff \
           -v "$PWD:/app" -v "$CONFIG:/cliff.toml:ro" -w /app "$GIT_CLIFF" --config /cliff.toml "$@"; }
         jq() { docker run --rm -i "$JQ" "$@"; }
-        summary() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+        summary() { echo "$*" >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"; }
         out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
         out released false
 
@@ -81,7 +81,7 @@ runs:
           if [ "$(echo "$commits" | jq length)" -gt 0 ]; then
             summary ""
             summary "Changes that ship with the next Release:"
-            echo "$commits" | jq -r '.[] | "- \(.line)"' >> "$GITHUB_STEP_SUMMARY"
+            echo "$commits" | jq -r '.[] | "- \(.line)"' >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
           fi
           exit 0
         fi
@@ -105,4 +105,4 @@ runs:
           summary "On \`$sha\`, after ${last:-the first commit}."
         fi
         summary ""
-        cat "$notes" >> "$GITHUB_STEP_SUMMARY"
+        cat "$notes" >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"

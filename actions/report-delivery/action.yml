@@ -55,7 +55,7 @@ runs:
       run: |
         set -euo pipefail
         repo=$GITHUB_REPOSITORY
-        summary() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+        summary() { echo "$*" >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"; }
         [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad version '$VERSION'"; exit 1; }
         tag="v$VERSION"
         sha=$(gh api "repos/$repo/commits/$REF" --jq .sha)

@@ -1,0 +1,103 @@
+name: Delivery summary
+description: >
+  The one summary at the top of a Ship or Re-deliver run: what happened
+  (version, release commit, digests, Release, GitOps PR) and what comes next.
+  The other actions write their notes to the file KINDORG_CI_NOTES names
+  instead of their own step summaries; this folds them in below, collapsed,
+  so nothing is said twice. Runs last, also when a step before it failed: the
+  title then names that step.
+inputs:
+  kind:
+    description: '"Ship" or "Re-deliver" — the first word of the title'
+    required: true
+  deliver:
+    description: '"true" when there was a Release to deliver (a Releasable change, or the latest Release)'
+    default: "false"
+  dry-run:
+    description: '"true": nothing was tagged or recorded'
+    default: "false"
+  version:
+    description: The Release's version (e.g. 1.4.0), or the would-be one in a dry run
+    default: ""
+  release-url:
+    default: ""
+  sha:
+    description: The commit built, or the release commit
+    required: true
+  images:
+    description: 'JSON list of {"name", "digest"}: promoted, or accepted when nothing was delivered'
+    default: "[]"
+  gitops-pr:
+    description: The GitOps PR merged by this run; empty when nothing new was recorded
+    default: ""
+  notes:
+    description: Markdown notes of the jobs before (e.g. Build's), shown with the steps' own
+    default: ""
+  failed:
+    description: The step that failed, in words; empty when none did
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+        DELIVER: ${{ inputs.deliver }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        VERSION: ${{ inputs.version }}
+        RELEASE_URL: ${{ inputs.release-url }}
+        SHA: ${{ inputs.sha }}
+        IMAGES: ${{ inputs.images }}
+        GITOPS_PR: ${{ inputs.gitops-pr }}
+        NOTES: ${{ inputs.notes }}
+        FAILED: ${{ inputs.failed }}
+        JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
+      run: |
+        set -euo pipefail
+        jq() { docker run --rm -i "$JQ" "$@"; }
+        s() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+        sha7=${SHA:0:7}
+        tag=${VERSION:+v$VERSION}
+        release="${tag:-none}"
+        [ -n "$RELEASE_URL" ] && release="[$tag]($RELEASE_URL)"
+
+        if [ -n "$FAILED" ]; then
+          s "## $KIND ${tag:-$sha7}: failed at $FAILED"
+          s "Stopped at **$FAILED**; its log names the cause, and nothing after it ran."
+          if [ "$DELIVER" = true ] && [ "$DRY_RUN" != true ] && [ -n "$RELEASE_URL" ]; then
+            s "The Release $release exists: once the cause is fixed, re-deliver it (AGENTS.md, When a delivery goes wrong). It is promoted again, never rebuilt."
+          fi
+        elif [ "$DELIVER" != true ]; then
+          s "## $KIND $sha7: nothing to release"
+          s "No Releasable change (feat, fix, perf or breaking) since the last Release: this commit is built and accepted, and ships with the next Release."
+        elif [ "$DRY_RUN" = true ]; then
+          s "## $KIND $tag (dry run)"
+          s "Would release $tag on \`$sha7\`: promoted to a throw-away tag and re-scanned; nothing tagged, nothing recorded in homelab-k8s, no PR touched."
+        elif [ -n "$GITOPS_PR" ]; then
+          s "## $KIND $tag"
+          s "**$tag recorded** in homelab-k8s. Next, without anyone: ArgoCD syncs it and turns the comment on the release commit's PR into \"running\" (or \"degraded\"); the \`production\` deployment of \`$sha7\` is the source of truth."
+        else
+          s "## $KIND $tag"
+          s "$tag was already recorded in homelab-k8s: nothing changed there, and the PRs' comments and the \`production\` deployment are left as they were."
+        fi
+
+        s ""
+        s "| | |"
+        s "| --- | --- |"
+        s "| Release | $release |"
+        s "| Commit | \`$SHA\` |"
+        rows=$(echo "${IMAGES:-[]}" | jq -r '[.[] | select(.digest != null and .digest != "") | "`\(.name)@\(.digest)`"] | join("<br>")' 2>/dev/null || true)
+        s "| Images | ${rows:-none} |"
+        s "| GitOps PR | ${GITOPS_PR:-none} |"
+
+        notes_file=${KINDORG_CI_NOTES:-}
+        if [ -n "$NOTES" ] || { [ -n "$notes_file" ] && [ -s "$notes_file" ]; }; then
+          s ""
+          s "<details><summary>What each step said</summary>"
+          s ""
+          [ -z "$NOTES" ] || s "$NOTES"
+          s ""
+          { [ -n "$notes_file" ] && [ -s "$notes_file" ]; } && cat "$notes_file" >> "$GITHUB_STEP_SUMMARY"
+          s ""
+          s "</details>"
+        fi

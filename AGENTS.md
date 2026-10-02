@@ -77,7 +77,8 @@ the next release of this repo. Each PR runs `self-test.yml`: the Checks, v4's `p
 `ci`) and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the
 artifact path with a dry-run Release and promotion, the list form of the
 image actions (two fixture images in one job), the report dry run, the
-no-downgrade cases, the Application annotation cases, and actionlint. Show
+no-downgrade cases, the Application annotation cases, actionlint, and
+v4's `ship.yml` on the fixture with a dry-run Release. Show
 new behaviour there as a dry run when it would otherwise write somewhere. A change to an input or output of a
 reusable workflow or action is breaking (`!`).
 

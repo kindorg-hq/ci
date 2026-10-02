@@ -122,9 +122,9 @@ runs:
               --cache-to "type=gha,mode=max,scope=${name}-test,ignore-error=true" \
               || fail "\`test\` stage failed (${dockerfile})"
             echo "::endgroup::"
-            echo "**${name}:** \`test\` stage passed." >> "$GITHUB_STEP_SUMMARY"
+            echo "**${name}:** \`test\` stage passed." >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
           else
-            echo "**${name} has no tests:** no \`test\` stage in \`${dockerfile}\`, nothing tested in Build." >> "$GITHUB_STEP_SUMMARY"
+            echo "**${name} has no tests:** no \`test\` stage in \`${dockerfile}\`, nothing tested in Build." >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
           fi
 
           if [ "$PUSH" = "true" ]; then

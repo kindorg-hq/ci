@@ -1,0 +1,294 @@
+# Ship: a merge to the default branch, as three Stages — Build → Accept →
+# Deliver. One job per Stage, the work as its steps, every image of the
+# service in turn (no matrix). .github/workflows/ship.yml in the service:
+#
+#   name: ship
+#   on:
+#     push:
+#       branches: [main]        # the default branch
+#
+#   jobs:
+#     ci:
+#       uses: kindorg-hq/ci/.github/workflows/ship.yml@v4
+#       permissions: {contents: read, packages: write, pull-requests: write, deployments: write}
+#       with:
+#         app: pepic                         # dir under homelab-k8s/manifests/
+#         images: '[{"name": "pepic"}]'      # context ".", dockerfile "Dockerfile"
+#         url: https://pepic.example.com     # where the service answers
+#       secrets: inherit
+#
+# The graph is `ci / Build` → `ci / Accept` → `ci / Deliver`; the run is
+# listed as "ship" with the merged PR's title, and its summary (one, from
+# Deliver) is headed "Ship vX.Y.Z" or "Ship <sha7>: nothing to release". No
+# run-name: it is fixed when the run starts, before the version is known (and
+# a run-name with the commit message would carry its whole body; GitHub's own
+# title is its first line).
+#   Build    the Dockerfile's `test` stage (when it has one), then each image,
+#            pushed as ghcr.io/<owner>/<name>:<commit-sha> — the Artifact.
+#   Accept   Trivy over the pushed images (CRITICAL with a fix fails).
+#   Deliver  cut release (git-cliff: only a Releasable change tags this very
+#            commit vX.Y.Z; otherwise the run ends here, green), promote
+#            (:<commit-sha> → :X.Y.Z, same digest, checked against what Accept
+#            scanned), re-scan, record in homelab-k8s (GitOps PR: no
+#            downgrade, pinned by digest, the Release on the Application,
+#            checks waited for, merged), report on the PRs (`released`, one
+#            "recorded" comment, `production` deployment in_progress). From
+#            there ArgoCD reports running on the release commit's PR.
+# Deliveries of one service never overtake each other: Deliver, from cutting
+# the Release to recording it, runs one at a time per service repo (its
+# concurrency group, shared with v3's golden-path.yml and with re-delivery),
+# and the GitOps PR refuses a version lower than the recorded one.
+#
+# The Deliver job is the one re-delivery runs too, with "find the latest
+# Release" in place of "cut release": its steps are this repo's actions, the
+# summary included (actions/delivery-summary). Those actions write their notes
+# to the file KINDORG_CI_NOTES names, not to their own step summaries, so the
+# run has one summary.
+#
+# Runs as the kindorg-ci GitHub App to tag the Release and for the GitOps PR:
+# vars.KINDORG_CI_APP_ID (org variable) and secrets.KINDORG_CI_APP_KEY.
+name: ship
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Application directory under homelab-k8s/manifests/
+        type: string
+        required: true
+      images:
+        description: 'JSON list of {"name", "context", "dockerfile"}; context defaults to ".", dockerfile to "Dockerfile"'
+        type: string
+        required: true
+      url:
+        description: Where the service answers, shown on its deployment
+        type: string
+        default: ""
+      runner:
+        description: Runner for the image builds (the cluster is arm64)
+        type: string
+        default: ubuntu-24.04-arm
+      trivy-severity:
+        type: string
+        default: CRITICAL
+      ci-ref:
+        description: Version of kindorg-hq/ci whose actions to use
+        type: string
+        default: v4
+      dry-run:
+        description: >
+          Self-test: cut the Release as a dry run, promote to a throw-away tag,
+          report as a dry run; no tag, no GitOps PR, nothing written on PRs
+        type: boolean
+        default: false
+    secrets:
+      KINDORG_CI_APP_KEY:
+        description: The kindorg-ci App's key; not needed in a dry run
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
+    outputs:
+      images: ${{ steps.build.outputs.images }}
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      - id: build
+        name: Tests (Dockerfile `test` stage) and image, pushed as :<commit-sha>
+        uses: ./.kindorg-ci/actions/build-image
+        with:
+          images: ${{ inputs.images }}
+          push: "true"
+          token: ${{ github.token }}
+      # for the run's one summary, written by Deliver
+      - id: notes
+        name: Notes for the summary
+        run: |
+          set -euo pipefail
+          eof="EOF_$(openssl rand -hex 8)"
+          { echo "notes<<$eof"; cat "$KINDORG_CI_NOTES" 2>/dev/null || true; echo "$eof"; } >> "$GITHUB_OUTPUT"
+
+  accept:
+    name: Accept
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      - name: Image scan (Trivy, ${{ inputs.trivy-severity }} with a fix fails)
+        uses: ./.kindorg-ci/actions/scan-image
+        with:
+          images: ${{ needs.build.outputs.images }}
+          severity: ${{ inputs.trivy-severity }}
+          token: ${{ github.token }}
+
+  deliver:
+    name: Deliver
+    needs: [build, accept]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Deliveries never overtake each other: one Deliver per service at a time,
+    # from cutting the Release to recording it in homelab-k8s — all one job,
+    # so the group covers it whole. Not cancel-in-progress: a delivery half
+    # done is worse than a late one. GitHub keeps one pending run per group
+    # and drops older pending ones; the next Release includes their commits.
+    # The same group as v3's golden-path.yml and re-delivery: they queue here.
+    concurrency:
+      group: golden-path-deliver-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      deployments: write
+    env:
+      KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
+      # what a dry run promotes to instead of the version
+      DRY_RUN_TAG: 0.0.0-dry-run-${{ github.event.pull_request.number || github.run_id }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # full history and tags: the version is computed since the last tag
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      # the App, not GITHUB_TOKEN: its tag and Release may trigger workflows
+      - id: token
+        name: Token of the kindorg-ci App
+        if: ${{ !inputs.dry-run }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+      - id: cut
+        name: Cut release (only on a Releasable change)
+        uses: ./.kindorg-ci/actions/cut-release
+        with:
+          dry-run: ${{ inputs.dry-run }}
+          token: ${{ steps.token.outputs.token }}
+
+      # from here on only with a Release (in a dry run: a would-be one)
+      - id: promote
+        name: Promote :<commit-sha> to the version, same digest
+        if: steps.cut.outputs.released == 'true' || (inputs.dry-run && steps.cut.outputs.version != '')
+        uses: ./.kindorg-ci/actions/promote-image
+        with:
+          images: ${{ needs.build.outputs.images }}
+          from-tag: ${{ github.sha }}
+          to-tag: ${{ inputs.dry-run && env.DRY_RUN_TAG || steps.cut.outputs.version }}
+          token: ${{ github.token }}
+      # build once, promote: what is delivered is what Accept scanned
+      - id: same
+        name: The promoted images are the accepted ones
+        if: steps.promote.outcome == 'success'
+        env:
+          ACCEPTED: ${{ needs.build.outputs.images }}
+          PROMOTED: ${{ steps.promote.outputs.images }}
+          JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
+        run: |
+          set -euo pipefail
+          jq() { docker run --rm -i "$JQ" "$@"; }
+          accepted=$(echo "$ACCEPTED" | jq -c 'map({name, digest})')
+          promoted=$(echo "$PROMOTED" | jq -c 'map({name, digest})')
+          [ "$accepted" = "$promoted" ] || {
+            echo "::error::promoted images differ from the accepted ones: $accepted → $promoted"; exit 1; }
+          echo "$promoted"
+      - id: rescan
+        name: Re-scan the promoted images
+        if: steps.same.outcome == 'success'
+        uses: ./.kindorg-ci/actions/scan-image
+        with:
+          images: ${{ steps.promote.outputs.images }}
+          severity: ${{ inputs.trivy-severity }}
+          token: ${{ github.token }}
+      - id: gitops
+        name: Record in homelab-k8s (GitOps PR)
+        if: ${{ steps.rescan.outcome == 'success' && !inputs.dry-run }}
+        uses: ./.kindorg-ci/actions/gitops-pr
+        with:
+          app: ${{ inputs.app }}
+          version: ${{ steps.cut.outputs.version }}
+          images: ${{ steps.promote.outputs.images }}
+          release-url: ${{ steps.cut.outputs.url }}
+          source-sha: ${{ github.sha }}
+          environment-url: ${{ inputs.url }}
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+      - id: report
+        name: Report on the PRs in the Release
+        if: steps.gitops.outcome == 'success' || (inputs.dry-run && steps.rescan.outcome == 'success')
+        uses: ./.kindorg-ci/actions/report-delivery
+        with:
+          dry-run: ${{ inputs.dry-run }}
+          version: ${{ steps.cut.outputs.version }}
+          # a dry run looks at the PR's own commits; the merge commit has no PR
+          ref: ${{ inputs.dry-run && (github.event.pull_request.head.sha || github.sha) || steps.cut.outputs.tag }}
+          release-url: ${{ steps.cut.outputs.url }}
+          gitops-pr: ${{ steps.gitops.outputs.pr-url }}
+          environment-url: ${{ inputs.url }}
+          token: ${{ github.token }}
+
+      - name: Summary
+        if: always()
+        uses: ./.kindorg-ci/actions/delivery-summary
+        with:
+          kind: Ship
+          deliver: ${{ steps.cut.outputs.released == 'true' || (inputs.dry-run && steps.cut.outputs.version != '') }}
+          dry-run: ${{ inputs.dry-run }}
+          version: ${{ steps.cut.outputs.version }}
+          release-url: ${{ steps.cut.outputs.url }}
+          sha: ${{ github.sha }}
+          images: ${{ steps.promote.outputs.images || needs.build.outputs.images }}
+          gitops-pr: ${{ steps.gitops.outputs.pr-url }}
+          notes: ${{ needs.build.outputs.notes }}
+          failed: >-
+            ${{ steps.token.outcome == 'failure' && 'the App token' ||
+            steps.cut.outcome == 'failure' && 'cut release' ||
+            steps.promote.outcome == 'failure' && 'promote' ||
+            steps.same.outcome == 'failure' && 'the promoted images are the accepted ones' ||
+            steps.rescan.outcome == 'failure' && 're-scan' ||
+            steps.gitops.outcome == 'failure' && 'record in homelab-k8s' ||
+            steps.report.outcome == 'failure' && 'report on the PRs' ||
+            job.status == 'cancelled' && 'a cancel' ||
+            job.status == 'failure' && 'set-up' || '' }}
