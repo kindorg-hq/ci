@@ -86,6 +86,24 @@ Plus, in the service repo:
   the release PR; nothing reaches the cluster until that PR is merged.
 - **Fix forward.** No rollback in the pipeline. Break-glass is a manual revert
   in homelab-k8s, described in its README.
+- **Deliveries never overtake each other.** Two quick merges must not cut the
+  same version twice, and an older run must never record its version after a
+  newer one — that would roll Production back. Two mechanisms:
+  - *One Deliver at a time per service.* golden-path.yml calls the whole
+    Deliver stage (cut release or find the latest one → promote → re-scan →
+    GitOps PR → report, `release-and-deliver.yml`) from one job in the
+    concurrency group `golden-path-deliver-<owner/repo>`, without
+    cancel-in-progress. The group is on the calling job because it is held
+    until the called workflow ends; a group on an inner job would let the next
+    run in between cut and record. Re-delivery (`workflow_dispatch`) queues in
+    the same group. GitHub keeps one pending run per group and drops older
+    pending ones; that is accepted — the next Release includes their commits.
+  - *No downgrade.* The GitOps PR (`actions/gitops-pr`) reads the
+    `app.kubernetes.io/version` already recorded for the app in homelab-k8s
+    and refuses a lower one, naming both versions. Equal is allowed
+    (re-delivery), and so is none yet (first delivery). The rule is
+    `actions/gitops-pr/no-downgrade.sh`; self-test runs its cases against
+    `fixtures/gitops`. Break-glass and the guard: see homelab-k8s README.
 - **Images are pinned by digest** in homelab-k8s and labelled
   `app.kubernetes.io/version`. Tags in ghcr can be moved; digests cannot.
 - **Trivy fails on CRITICAL with a fix available.** HIGH on old base images

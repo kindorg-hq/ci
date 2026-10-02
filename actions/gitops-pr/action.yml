@@ -1,6 +1,7 @@
 name: GitOps PR
 description: >
-  Record a release in the GitOps repo through a pull request: pin each image
+  Record a release in the GitOps repo through a pull request: refuse a version
+  lower than the one recorded (no-downgrade.sh), pin each image
   by digest, label the resources with the version, open a PR, wait for the
   manifest checks, merge. ArgoCD rolls out what lands on main.
   The repo is private on the free plan, so GitHub cannot require the checks
@@ -60,6 +61,17 @@ runs:
         token: ${{ steps.token.outputs.token }}
         path: .gitops
         persist-credentials: true
+
+    # Never backwards: an older run that finishes after a newer one must not
+    # roll Production back. Equal (re-delivery) and none yet (first delivery)
+    # pass; the rule lives in no-downgrade.sh, tested by self-test.
+    - id: no-downgrade
+      shell: bash
+      working-directory: .gitops
+      env:
+        APP: ${{ inputs.app }}
+        VERSION: ${{ inputs.version }}
+      run: 'bash "$GITHUB_ACTION_PATH/no-downgrade.sh" "manifests/${APP}/base" "$VERSION"'
 
     - id: edit
       shell: bash
