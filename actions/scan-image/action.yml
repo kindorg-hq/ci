@@ -10,6 +10,11 @@ inputs:
   severity:
     description: Severities that fail the check
     default: CRITICAL
+  platform:
+    description: >
+      Platform of the image. A pushed image is an index, and Trivy would look
+      for its own default (linux/amd64) in it — we build arm64.
+    default: linux/arm64
   token:
     description: Registry token, needed only to scan a pushed private image
     default: ""
@@ -21,6 +26,7 @@ runs:
         REF: ${{ inputs.ref }}
         SEVERITY: ${{ inputs.severity }}
         TOKEN: ${{ inputs.token }}
+        PLATFORM: ${{ inputs.platform }}
         TRIVY: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
       run: |
         set -euo pipefail
@@ -31,5 +37,5 @@ runs:
         docker run --rm "${auth[@]}" \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v "$HOME/.cache/trivy:/root/.cache/trivy" \
-          "$TRIVY" image --quiet --ignore-unfixed --severity "$SEVERITY" \
+          "$TRIVY" image --quiet --ignore-unfixed --severity "$SEVERITY" --platform "$PLATFORM" \
           --exit-code 1 --format table "$REF"

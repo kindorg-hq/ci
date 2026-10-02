@@ -34,6 +34,7 @@ jobs:
   release-please:
     # API-only: a single-CPU unprivileged container is enough
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     outputs:
       released: ${{ steps.rp.outputs.release_created || 'false' }}
       version: ${{ steps.rp.outputs.version }}

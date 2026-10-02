@@ -21,6 +21,7 @@ jobs:
   lint:
     name: Workflows and actions are valid
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       # egress audit: logs every outbound connection of this job
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -32,3 +33,35 @@ jobs:
       - name: actionlint
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+
+  deliver-path:
+    # The checks above scan a local image; delivery scans the pushed one — an
+    # index in ghcr. That path broke the first real release (Trivy looked for
+    # linux/amd64 in an arm64 index), so it is tested here too.
+    name: Pushed image scans clean (delivery path)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: build
+        uses: ./actions/build-image
+        with:
+          name: hello
+          context: fixtures/hello
+          dockerfile: fixtures/hello/Dockerfile
+          push: "true"
+          version: 0.0.0-pr-${{ github.event.pull_request.number }}
+          token: ${{ github.token }}
+      - uses: ./actions/scan-image
+        with:
+          ref: ${{ steps.build.outputs.ref }}
+          token: ${{ github.token }}
