@@ -32,13 +32,34 @@ jobs:
           persist-credentials: false
       - name: actionlint
         run: |
-          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+          # actionlint 1.7.12 predates the self-repository syntax ($/) that
+          # golden-path.yml calls its stages with; GitHub accepts it
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color \
+            -ignore 'reusable workflow call "\$/'
+
+  golden-path:
+    # The entry a service calls, on a pull request: it must dispatch to the
+    # Checks, with its stages resolved from this commit ($/).
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/golden-path.yml
+    # what golden-path.yml's jobs declare, though only the Checks run here
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      deployments: write
+    with:
+      app: hello
+      images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
+      ci-ref: ${{ github.event.pull_request.head.sha }}
 
   deliver-path:
-    # The path a service's artifact takes: build.yml pushes it tagged with the
-    # commit and scans the pushed index (that scan broke the first real release:
-    # Trivy looked for linux/amd64 in an arm64 index); deliver.yml promotes it
-    # to a version without rebuilding — the digest must not change.
+    # The path a service's artifact takes after a merge: Build runs the
+    # fixture's test stage and pushes the image tagged with the commit, Accept
+    # scans the pushed index (that scan broke the first real release: Trivy
+    # looked for linux/amd64 in an arm64 index), Deliver cuts the Release — here
+    # a dry run on this repo's own history: version and notes in the summary, no
+    # tag — and promotes the image without rebuilding: the digest must not change.
     name: "Build, Accept, Deliver: artifact path of the fixture"
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
@@ -52,6 +73,7 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - id: build
         uses: ./actions/build-image
@@ -65,6 +87,9 @@ jobs:
         with:
           ref: ${{ steps.build.outputs.ref }}
           token: ${{ github.token }}
+      - uses: ./actions/cut-release
+        with:
+          dry-run: "true"
       - uses: ./actions/promote-image
         with:
           image: ghcr.io/${{ github.repository_owner }}/hello

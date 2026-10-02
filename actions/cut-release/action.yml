@@ -1,0 +1,108 @@
+name: Cut release
+description: >
+  Make the checked-out commit a Release, when it carries a Releasable change.
+  git-cliff reads the Conventional Commits since the last vX.Y.Z tag
+  (release-please tags count too): with a feat, fix, perf or breaking change
+  among them it computes the next version, tags this very commit and creates
+  the GitHub Release with the notes grouped by type. Otherwise nothing is
+  tagged and the run summary says why. dry-run computes and shows the same,
+  without tagging. Re-running on a commit that already has its tag is a no-op
+  that returns that Release.
+inputs:
+  dry-run:
+    description: '"true": compute the version and notes, tag nothing'
+    default: "false"
+  token:
+    description: Token with contents:write on the repo (the kindorg-ci App); not needed in dry-run
+    default: ""
+  path:
+    description: Checkout of the repo with its full history and tags (fetch-depth 0)
+    default: "."
+outputs:
+  released:
+    description: '"true" when the commit is a Release (never in dry-run)'
+    value: ${{ steps.cut.outputs.released }}
+  version:
+    description: The version, e.g. 1.4.0 (also the would-be version in dry-run)
+    value: ${{ steps.cut.outputs.version }}
+  tag:
+    description: The tag, e.g. v1.4.0
+    value: ${{ steps.cut.outputs.tag }}
+  url:
+    description: The GitHub Release
+    value: ${{ steps.cut.outputs.url }}
+runs:
+  using: composite
+  steps:
+    - id: cut
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        DRY_RUN: ${{ inputs.dry-run }}
+        GH_TOKEN: ${{ inputs.token }}
+        CONFIG: ${{ github.action_path }}/cliff.toml
+        GIT_CLIFF: orhunp/git-cliff:2.14.2@sha256:1e696a381a1b0366bb6ccbb6bd4e50e73473fda88eab3a757b95e0d0d66c9531
+        JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
+      run: |
+        set -euo pipefail
+        # tools pinned by digest; git-cliff as the checkout's owner, so git
+        # trusts the repo (its image's entrypoint would split arguments)
+        cliff() { docker run --rm -u "$(id -u):$(id -g)" --entrypoint git-cliff \
+          -v "$PWD:/app" -v "$CONFIG:/cliff.toml:ro" -w /app "$GIT_CLIFF" --config /cliff.toml "$@"; }
+        jq() { docker run --rm -i "$JQ" "$@"; }
+        summary() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+        out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+        out released false
+
+        sha=$(git rev-parse HEAD)
+        [ "$(git rev-parse --is-shallow-repository)" = false ] || {
+          echo "::error::cut-release needs the full history and tags: checkout with fetch-depth: 0"; exit 1; }
+
+        # a re-run: the commit already is a Release
+        tag=$(git tag --points-at "$sha" --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+        if [ -n "$tag" ]; then
+          out version "${tag#v}"; out tag "$tag"
+          if [ "$DRY_RUN" != true ]; then
+            out released true
+            out url "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
+          fi
+          summary "Already released: \`$sha\` is **$tag**."
+          exit 0
+        fi
+
+        last=$(git tag --merged "$sha" --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+        # Releasable: feat, fix or perf, or breaking (! or BREAKING CHANGE)
+        commits=$(cliff --unreleased --context 2>/dev/null | jq -c '[.[0].commits[] | {
+            line: (.raw_message | split("\n")[0]),
+            releasable: (.breaking or (.raw_message | test("^(feat|fix|perf)(\\([^)]*\\))?!?:")))}]')
+        if [ "$(echo "$commits" | jq '[.[] | select(.releasable)] | length')" = 0 ]; then
+          summary "### No Release"
+          summary "No Releasable change (feat, fix, perf or breaking) since ${last:-the first commit}: this commit is built and accepted, nothing is tagged or delivered."
+          if [ "$(echo "$commits" | jq length)" -gt 0 ]; then
+            summary ""
+            summary "Changes that ship with the next Release:"
+            echo "$commits" | jq -r '.[] | "- \(.line)"' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
+        fi
+
+        tag=$(cliff --bumped-version 2>/dev/null)
+        [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::git-cliff computed '$tag'"; exit 1; }
+        version=${tag#v}
+        notes=$(mktemp)
+        cliff --unreleased --tag "$tag" --strip all 2>/dev/null | cat -s > "$notes"
+        out version "$version"; out tag "$tag"
+
+        if [ "$DRY_RUN" = true ]; then
+          summary "### Dry run: would release $tag"
+          summary "On \`$sha\`, after ${last:-the first commit}. Nothing tagged."
+        else
+          # the tag goes on this very commit, created with the Release
+          url=$(gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$sha" \
+            --title "$tag" --notes-file "$notes")
+          out released true; out url "$url"
+          summary "### Released [$tag]($url)"
+          summary "On \`$sha\`, after ${last:-the first commit}."
+        fi
+        summary ""
+        cat "$notes" >> "$GITHUB_STEP_SUMMARY"
