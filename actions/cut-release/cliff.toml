@@ -10,7 +10,7 @@ body = """
 {% if breaking %}
 ### Breaking changes
 {% for commit in breaking %}
-- {% if commit.scope %}{{ commit.scope }} {% endif %}{{ commit.breaking_description | default(value=commit.message) | split(pat="\n") | first | trim | upper_first }}
+- {% if commit.scope %}{{ commit.scope }} {% endif %}{{ commit.breaking_description | default(value=commit.message) | trim | replace(from="\n", to=" ") | upper_first }}
 {%- endfor %}
 {% endif %}
 {% for group, commits in commits | group_by(attribute="group") %}
