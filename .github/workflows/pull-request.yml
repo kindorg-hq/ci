@@ -25,7 +25,7 @@ on:
       ci-ref:
         description: Version of kindorg-hq/ci whose actions to use
         type: string
-        default: v2
+        default: v3
 
 permissions:
   contents: read

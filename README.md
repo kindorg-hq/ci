@@ -67,7 +67,6 @@ the Artifact built and scanned on merge. A Release only adds a tag to its digest
 | `.github/workflows/release-and-deliver.yml` | The Deliver stage as one unit: `Deliver: cut release` (push) or `Deliver: find the latest release` (workflow_dispatch), then `deliver.yml`. Not called by services directly. |
 | `.github/workflows/deliver.yml` | Deliver a Release without building: promote and re-scan each image, record it in homelab-k8s, report on the PRs. |
 | `.github/workflows/release.yml` | release-please. In v3 only `release.self.yml` uses it, for this repo's own releases; services no longer do (callers on `@v2` read the v2 tag's copy). |
-| `.github/workflows/checks.yml` | Deprecated forwarder to `pull-request.yml@v2`, left as it was in v2. Nothing in v3 calls it. |
 | `.github/workflows/self-test.yml` | This repo's PR checks: the Checks and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the report dry run, the no-downgrade cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `actions/build-image` | Build one image with buildx for linux/arm64; builds the Dockerfile's `test` stage first when it has one. On PRs loads it locally; on merge pushes `:<commit-sha>`. |
