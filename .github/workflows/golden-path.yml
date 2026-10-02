@@ -1,0 +1,189 @@
+# The golden path: the one workflow a service calls. The service states what
+# it is (app, images, url); the golden path decides how it gets to Production.
+# .github/workflows/pipeline.yml in the service:
+#
+#   name: pipeline
+#   on:
+#     pull_request:
+#     push:
+#       branches: [main]        # the default branch
+#     workflow_dispatch:        # re-deliver the latest Release
+#
+#   jobs:
+#     golden-path:
+#       uses: kindorg-hq/ci/.github/workflows/golden-path.yml@v3
+#       permissions: {contents: read, packages: write, pull-requests: write, deployments: write}
+#       with:
+#         app: pepic                         # dir under homelab-k8s/manifests/
+#         images: '[{"name": "pepic"}]'      # context ".", dockerfile "Dockerfile"
+#         url: https://pepic.example.com     # where the service answers
+#       secrets: inherit
+#
+# What each trigger does:
+#   pull_request      Checks: Build and Accept of the image (pull-request.yml).
+#   push (default     Build the Artifact (running the Dockerfile's `test` stage
+#   branch)           when it has one) → Accept → Deliver: cut release (only on
+#                     a Releasable change: git-cliff tags vX.Y.Z on this very
+#                     commit) → promote, re-scan, GitOps PR (deliver.yml).
+#   workflow_dispatch Re-deliver the latest Release: promote its Artifact again,
+#                     never rebuild.
+#
+# It runs as the kindorg-ci GitHub App for the Release and the GitOps PR:
+# vars.KINDORG_CI_APP_ID (org variable) and secrets.KINDORG_CI_APP_KEY.
+name: golden-path
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Application directory under homelab-k8s/manifests/
+        type: string
+        required: true
+      images:
+        description: 'JSON list of {"name", "context", "dockerfile"}; context defaults to ".", dockerfile to "Dockerfile"'
+        type: string
+        required: true
+      url:
+        description: Where the service answers, shown on its deployment
+        type: string
+        default: ""
+      runner:
+        description: Runner for the image builds (the cluster is arm64)
+        type: string
+        default: ubuntu-24.04-arm
+      trivy-severity:
+        type: string
+        default: CRITICAL
+      require-issue:
+        description: The PR title's scope must name the work item, type(#N)
+        type: boolean
+        default: true
+      ci-ref:
+        description: Version of kindorg-hq/ci whose actions to use
+        type: string
+        default: v3
+    secrets:
+      KINDORG_CI_APP_KEY:
+        # not on pull requests: Dependabot PRs get no secrets
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # $/ is this repo (kindorg-hq/ci) at the commit being run, not the caller
+  pull-request:
+    if: github.event_name == 'pull_request'
+    uses: $/.github/workflows/pull-request.yml
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      images: ${{ inputs.images }}
+      runner: ${{ inputs.runner }}
+      trivy-severity: ${{ inputs.trivy-severity }}
+      require-issue: ${{ inputs.require-issue }}
+      ci-ref: ${{ inputs.ci-ref }}
+
+  # Build: artifact (with the test stage), Accept: artifact scan
+  build:
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    uses: $/.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      images: ${{ inputs.images }}
+      runner: ${{ inputs.runner }}
+      trivy-severity: ${{ inputs.trivy-severity }}
+      ci-ref: ${{ inputs.ci-ref }}
+
+  release:
+    name: "Deliver: cut release"
+    # only on what Build and Accept passed: a red Accept releases nothing
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # one at a time, so two quick merges cannot compute the same version
+    concurrency:
+      group: golden-path-release-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    outputs:
+      released: ${{ steps.cut.outputs.released }}
+      version: ${{ steps.cut.outputs.version }}
+      tag: ${{ steps.cut.outputs.tag }}
+      url: ${{ steps.cut.outputs.url }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # full history and tags: the version is computed since the last tag
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kindorg-hq/ci
+          ref: ${{ inputs.ci-ref }}
+          path: .kindorg-ci
+          persist-credentials: false
+      # the App, not GITHUB_TOKEN: its tag and Release may trigger workflows
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
+      - id: cut
+        uses: ./.kindorg-ci/actions/cut-release
+        with:
+          token: ${{ steps.token.outputs.token }}
+
+  latest:
+    name: "Deliver: find the latest release"
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.latest.outputs.version }}
+      tag: ${{ steps.latest.outputs.tag }}
+      url: ${{ steps.latest.outputs.url }}
+    steps:
+      - id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName) || {
+            echo "::error::no Release to re-deliver"; exit 1; }
+          url=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
+          { echo "tag=$tag"; echo "version=${tag#v}"; echo "url=$url"; } >> "$GITHUB_OUTPUT"
+          echo "Re-delivering the latest Release, [$tag]($url): its Artifact is promoted again, nothing is rebuilt." >> "$GITHUB_STEP_SUMMARY"
+
+  # Deliver: promote and re-scan, record in homelab-k8s, report
+  deliver:
+    needs: [release, latest]
+    if: >-
+      !cancelled() &&
+      (needs.release.outputs.released == 'true' || needs.latest.result == 'success')
+    uses: $/.github/workflows/deliver.yml
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      deployments: write
+    with:
+      app: ${{ inputs.app }}
+      version: ${{ needs.release.outputs.version || needs.latest.outputs.version }}
+      ref: ${{ needs.release.outputs.tag || needs.latest.outputs.tag }}
+      release-url: ${{ needs.release.outputs.url || needs.latest.outputs.url }}
+      environment-url: ${{ inputs.url }}
+      images: ${{ inputs.images }}
+      trivy-severity: ${{ inputs.trivy-severity }}
+      ci-ref: ${{ inputs.ci-ref }}
+    secrets:
+      KINDORG_CI_APP_KEY: ${{ secrets.KINDORG_CI_APP_KEY }}

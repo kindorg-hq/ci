@@ -1,8 +1,10 @@
 name: Build image
 description: >
-  Build one container image with buildx. On a pull request it only proves the
-  Dockerfile builds (loaded locally for scanning); on delivery it pushes the
-  version and commit tags to ghcr and returns the digest.
+  Build one container image with buildx. When the Dockerfile has a `test`
+  stage, that stage is built first: the service's tests run in the image's own
+  environment, and a failure stops the Build. On a pull request it then only
+  proves the Dockerfile builds (loaded locally for scanning); on merge it
+  pushes the commit tag to ghcr and returns the digest.
 inputs:
   name:
     description: Image name under ghcr.io/<owner>/ (e.g. pepic)
@@ -43,6 +45,39 @@ runs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
+
+    # the service's tests: a stage named `test` in its Dockerfile
+    - id: test
+      shell: bash
+      env:
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        NAME: ${{ inputs.name }}
+      run: |
+        if grep -qiE '^[[:space:]]*FROM[[:space:]].*[[:space:]]AS[[:space:]]+test[[:space:]]*$' "$DOCKERFILE"; then
+          echo "stage=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "stage=false" >> "$GITHUB_OUTPUT"
+          echo "**${NAME} has no tests:** no \`test\` stage in \`${DOCKERFILE}\`, nothing tested in Build." >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - if: steps.test.outputs.stage == 'true'
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        target: test
+        platforms: ${{ inputs.platform }}
+        outputs: type=cacheonly
+        cache-from: |
+          type=gha,scope=${{ inputs.name }}
+          type=gha,scope=${{ inputs.name }}-test
+        cache-to: type=gha,mode=max,scope=${{ inputs.name }}-test
+
+    - if: steps.test.outputs.stage == 'true'
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+      run: echo "**${NAME}:** \`test\` stage passed." >> "$GITHUB_STEP_SUMMARY"
 
     - id: tags
       shell: bash
