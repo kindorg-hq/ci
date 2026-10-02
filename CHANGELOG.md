@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.1](https://github.com/kindorg-hq/ci/compare/v4.1.0...v4.1.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **#46:** one summary per run, client-id for the App token ([#65](https://github.com/kindorg-hq/ci/issues/65)) ([3969edb](https://github.com/kindorg-hq/ci/commit/3969edbfddda7eb1cb1c47eebfbdafa82536aefe))
+* **#62:** grant actions: read to self-test when releasing ([#63](https://github.com/kindorg-hq/ci/issues/63)) ([96e8ce6](https://github.com/kindorg-hq/ci/commit/96e8ce6f6f45a214d1136ae021c122c51b98bc44))
+
 ## [4.1.0](https://github.com/kindorg-hq/ci/compare/v4.0.0...v4.1.0) (2026-10-02)
 
 
