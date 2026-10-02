@@ -1,4 +1,4 @@
-# This repo tests itself with its own checks, against its own code — not v1:
+# This repo tests itself with its own checks, against its own code — not a released tag:
 # a change here must pass before it can become the version every service uses.
 # On push to main it runs inside release.self.yml, so a release waits for it.
 name: self-test

@@ -1,24 +1,15 @@
-# Deliver a Release to the cluster — without building anything. The artifact
+# Deliver a Release to Production — without building anything. The Artifact
 # was built and scanned on merge (build.yml), tagged with its commit SHA; here
 # it is promoted: the release tag's commit is resolved, that very image gets
 # the version tag (same digest), is re-scanned (new CVEs since the merge), and
 # is recorded in homelab-k8s by a PR — pinned by digest, labelled with the
-# version. ArgoCD rolls out what lands there.
+# version. ArgoCD rolls out what lands there. Then the Release is reported on
+# its PRs and the `production` deployment.
 #
-#   deliver:
-#     needs: [build, release]
-#     if: needs.release.outputs.released == 'true'
-#     uses: kindorg-hq/ci/.github/workflows/deliver.yml@v2
-#     permissions: {contents: read, packages: write, pull-requests: write, deployments: write}
-#     with:
-#       app: pepic
-#       version: ${{ needs.release.outputs.version }}
-#       ref: ${{ needs.release.outputs.tag }}
-#       release-url: ${{ needs.release.outputs.url }}
-#       images: '[{"name": "pepic"}]'
-#     secrets: inherit
+# release-and-deliver.yml calls it, after cutting the Release or finding the
+# latest one; services do not call it directly.
 #
-# Only releases are delivered; there is no rollback path — a bad release is
+# Only Releases are delivered; there is no rollback path — a bad Release is
 # fixed forward by the next one (break-glass: see homelab-k8s README).
 name: deliver
 
@@ -33,7 +24,7 @@ on:
         type: string
         required: true
       ref:
-        description: Git ref to build (the release tag)
+        description: The release commit's ref (its tag), resolved to the commit whose Artifact is promoted
         type: string
         required: true
       release-url:

@@ -1,14 +1,7 @@
-# Pull-request pipeline: the Build and Accept stages, with no dependencies and
-# nothing published. Call it from the service:
-#
-#   pull-request:
-#     if: github.event_name == 'pull_request'
-#     uses: kindorg-hq/ci/.github/workflows/pull-request.yml@v2
-#     with:
-#       images: '[{"name": "pepic", "context": ".", "dockerfile": "Dockerfile"}]'
-#
-# The service runs its own tests (Build) in its own workflow; this is the part
-# every service shares.
+# The Checks: the Build and Accept stages of a pull request, with nothing
+# published. Build runs the service's tests (its Dockerfile's `test` stage)
+# and builds the image. golden-path.yml calls it on pull_request (and
+# self-test.yml on this repo's PRs); services do not call it directly.
 name: pull-request
 
 on:
@@ -115,10 +108,10 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
-      # Squash merges make the title the commit — release-please reads it, and
-      # the scope (#N) traces the change to its work item in the changelog.
-      # Release PRs (release-please) and dependency PRs (Dependabot) carry
-      # their own scopes and are let through by label.
+      # Squash merges make the title the commit — git-cliff (cut-release)
+      # reads it, and the scope (#N) traces the change to its work item in the
+      # Release notes. Dependency PRs (Dependabot) and this repo's release PRs
+      # (release-please) carry their own scopes and are let through by label.
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ github.token }}

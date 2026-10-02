@@ -1,6 +1,6 @@
-# DEPRECATED — use pull-request.yml. Kept so @v2 callers of checks.yml keep
-# working; it forwards to pull-request.yml@v2 (a ./ path would resolve in the
-# caller's repo). Job names are the new ones, nested under this one.
+# DEPRECATED, left as it was in v2: nothing in v3 calls it, and @v1/@v2
+# callers read their tag's own copy. It forwards to pull-request.yml@v2 (a ./
+# path would resolve in the caller's repo). Services use golden-path.yml.
 name: checks
 
 on:
