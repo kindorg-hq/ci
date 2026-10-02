@@ -15,6 +15,7 @@
 #         app: pepic                         # dir under homelab-k8s/manifests/
 #         images: '[{"name": "pepic"}]'      # context ".", dockerfile "Dockerfile"
 #         url: https://pepic.example.com     # where the service answers
+#         test-compose: compose.test.yml     # optional: tests that need a database
 #       secrets: inherit
 #
 # The graph is `ci / Build` → `ci / Accept` → `ci / Deliver`; the run is
@@ -24,7 +25,8 @@
 # a run-name with the commit message would carry its whole body; GitHub's own
 # title is its first line).
 #   Build    the Dockerfile's `test` stage (when it has one), then each image,
-#            pushed as ghcr.io/<owner>/<name>:<commit-sha> — the Artifact. Its
+#            pushed as ghcr.io/<owner>/<name>:<commit-sha> — the Artifact —
+#            then the compose tests against it by digest (test-compose). Its
 #            output is the Artifact list, {name, image, digest} per image
 #            (actions/artifact/artifact.sh), which every step after only reads.
 #   Accept   Trivy over the pushed images (CRITICAL with a fix fails) — the
@@ -72,6 +74,13 @@ on:
         required: true
       url:
         description: Where the service answers, shown on its deployment
+        type: string
+        default: ""
+      test-compose:
+        description: >
+          Path to a compose file whose service `test` runs the tests that need
+          other services (a database) against the images just built, each
+          given as IMAGE_<NAME> (README, "Tests that need a database"); "" for none
         type: string
         default: ""
       runner:
@@ -133,6 +142,13 @@ jobs:
           images: ${{ inputs.images }}
           push: "true"
           token: ${{ github.token }}
+      # pulled by digest: the very images Accept scans and Deliver promotes
+      - name: Compose tests (${{ inputs.test-compose }}) against the built images
+        if: inputs.test-compose != ''
+        uses: ./.kindorg-ci/actions/test-compose
+        with:
+          compose-file: ${{ inputs.test-compose }}
+          images: ${{ steps.build.outputs.images }}
       # for the run's one summary, written by Deliver
       - id: notes
         name: Notes for the summary

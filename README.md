@@ -22,7 +22,8 @@ nothing.
 ```
 ┌─ ci / Build ───────────────────────────┐
 │ Dockerfile `test` stage (if any),      │
-│ then each image, loaded locally        │
+│ then each image, loaded locally,       │
+│ then compose tests on it (if any)      │
 └────────────────────────────────────────┘
                     │
                     ▼
@@ -45,7 +46,8 @@ nothing to release".
 ┌─ ci / Build ───────────────────────────┐
 │ `test` stage again, then each image    │
 │ pushed as ghcr.io/<owner>/pepic:<sha>  │
-│ — the Artifact                         │
+│ — the Artifact; compose tests (if any) │
+│ on it, pulled by digest                │
 └────────────────────────────────────────┘
                     │
                     ▼
@@ -201,7 +203,8 @@ jobs:
 
 The workflow is named `re-deliver`; `gh workflow run` takes its file:
 `gh workflow run redeliver.yml`. `run-name` sits in the caller: a called workflow's own is ignored. Optional
-inputs: `runner` (default `ubuntu-24.04-arm`; pull request and ship),
+inputs: `test-compose` (pull request and ship; see "Tests that need a
+database" below), `runner` (default `ubuntu-24.04-arm`; pull request and ship),
 `trivy-severity` (`CRITICAL`), `require-issue` (pull request; `true`: the PR
 title's scope must be `#N`), `ci-ref` (`v4`). Each entry of `images` may set
 `context` and `dockerfile`.
@@ -227,15 +230,93 @@ Before the first merge:
 - **Tests, optional**: a stage `FROM … AS test` in the Dockerfile. Build runs
   it before the image, on every PR and every merge, for linux/arm64; a failure
   fails Build. Keep the image as the last stage. Without a `test` stage the
-  run summary says the service has no tests.
+  run summary says the service has no tests. Tests that need a database:
+  `test-compose`, below.
 - **Ruleset** (public repos; on the free plan private ones cannot require
   checks): require two checks, whatever the number of images:
-  - `ci / Build` — the `test` stage and every image build;
+  - `ci / Build` — the `test` stage, every image build, the compose tests;
   - `ci / Accept` — image scan, PR title, no secrets, no vulnerable
     dependencies added (skipped on private repos).
 
 Dependabot PRs (label `dependencies`) skip the title check, and get no
 secrets, which the pull request does not need.
+
+### Tests that need a database
+
+A `test` stage runs inside `docker build`: no Postgres next to it. Tests that
+need one run from a compose file in the service's repo, given as
+`test-compose` to **both** `pull-request.yml` and `ship.yml` (the same
+value):
+
+```yaml
+    with:
+      images: '[{"name": "the-blog"}]'
+      test-compose: compose.test.yml
+```
+
+After Build has built the images, it runs that file's service **`test`**
+(`docker compose run --rm -T test`: its `depends_on` started first, a
+`condition: service_healthy` waited for) against **those images**, and its
+exit code decides: non-zero fails `ci / Build`, so nothing after it runs (no
+Accept, no Release). The contract:
+
+- **`IMAGE_<NAME>`** per image of `images`: the name upper-cased, `-` and `.`
+  as `_` (`the-blog` → `IMAGE_THE_BLOG`, `jtbd-web` → `IMAGE_JTBD_WEB`). On a
+  pull request it is the image loaded locally,
+  `ghcr.io/<owner>/<name>`; on a merge `ghcr.io/<owner>/<name>@sha256:…`,
+  pulled by digest — the very image Accept scans and Deliver promotes.
+  Nothing is rebuilt; write `${IMAGE_<NAME>:?}` so a typo fails loudly.
+- **A service `test`**: what runs. Everything else in the file (the
+  database) is started for it. Use images that are multi-arch (the official
+  `postgres` is): Build runs on arm64.
+- **No `build:` for the image under test.** An image lacking its test tools
+  (a production image without pytest) can get a test image built
+  `FROM ${IMAGE_<NAME>}` with only the tools added — the code tested is
+  still the built one. Build notes it, as a notice, when no service runs an
+  image as is.
+- No ports, volumes from the host or `.env` needed: the services reach each
+  other by name, and the run is removed afterwards with its volumes.
+
+On a failure the summary shows the last 80 lines of the `test` service's
+output (the failing test); the log has all of it and the other services'
+logs. On success it says "Compose tests passed" with the refs tested.
+
+`compose.test.yml` for a Django service with Postgres:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 30
+  test:
+    image: ${IMAGE_THE_BLOG:?set by ci}
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app_test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "python manage.py migrate --noinput && python -m pytest --tb=short -q"]
+```
+
+When the production image has no test tools, in place of `image:`:
+
+```yaml
+  test:
+    build:
+      dockerfile_inline: |
+        FROM ${IMAGE_JTBD_WEB:?set by ci}
+        RUN pip install --no-cache-dir -r requirements/test.txt
+```
 
 ## How Build caches
 
@@ -353,14 +434,15 @@ Move to v4 directly:
 
 | File | What it does |
 | --- | --- |
-| `.github/workflows/pull-request.yml` | What a service's pull request runs: `Build` (Dockerfile `test` stage, then every image, loaded locally and handed to Accept as the run artifact `pr-images`, a `docker save` of tens of MB kept 1 day) → `Accept` (image scan, PR title, gitleaks, dependency review through GitHub's dependency-graph compare API — each a step, all run, the failing one named). One summary, from Accept: the four checks, then Build's and the dependency step's notes, collapsed; Build writes it instead when Build fails. Publishes nothing, needs no secrets. |
-| `.github/workflows/ship.yml` | What a merge runs: `Build` (`test` stage, then every image pushed as `:<commit-sha>`) → `Accept` (Trivy over them) → `Deliver` (cut release, then `actions/deliver` on Build's Artifact list, then the summary; in the concurrency group `golden-path-deliver-<owner/repo>`). One summary, from Deliver (from Build when Build fails). `dry-run` for self-test. |
+| `.github/workflows/pull-request.yml` | What a service's pull request runs: `Build` (Dockerfile `test` stage, then every image, loaded locally, then the compose tests (`test-compose`) on them, and handed to Accept as the run artifact `pr-images`, a `docker save` of tens of MB kept 1 day) → `Accept` (image scan, PR title, gitleaks, dependency review through GitHub's dependency-graph compare API — each a step, all run, the failing one named). One summary, from Accept: the four checks, then Build's and the dependency step's notes, collapsed; Build writes it instead when Build fails. Publishes nothing, needs no secrets. |
+| `.github/workflows/ship.yml` | What a merge runs: `Build` (`test` stage, then every image pushed as `:<commit-sha>`, then the compose tests on them by digest) → `Accept` (Trivy over them) → `Deliver` (cut release, then `actions/deliver` on Build's Artifact list, then the summary; in the concurrency group `golden-path-deliver-<owner/repo>`). One summary, from Deliver (from Build when Build fails). `dry-run` for self-test. |
 | `.github/workflows/redeliver.yml` | Re-delivery, by hand (`workflow_dispatch`): one job, `Deliver` — find the latest Release, then `actions/deliver` with no Artifact list (it finds that commit's; nothing rebuilt, none there fails), then the summary; in Ship's concurrency group. A version already recorded changes nothing in homelab-k8s and leaves comments and the `production` deployment as they are. `dry-run` for self-test. |
-| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, recorded in a copy of `fixtures/gitops`, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), `actions/deliver` called directly (job `deliver`: a dry-run delivery with its diff checked, a downgrade failing "at record", a missing Artifact failing "at find"), the recording cases (`record.test.sh`) and a dry-run record of pepic in the real homelab-k8s (no diff expected), the list form of the image actions (two images in one job, one failing; found again by commit), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
+| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, recorded in a copy of `fixtures/gitops`, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), `actions/deliver` called directly (job `deliver`: a dry-run delivery with its diff checked, a downgrade failing "at record", a missing Artifact failing "at find"), the recording cases (`record.test.sh`) and a dry-run record of pepic in the real homelab-k8s (no diff expected), the list form of the image actions (two images in one job, one failing; found again by commit), the compose tests (one passing, one failing), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `.github/workflows/release.yml` | release-please, for this repo's own releases (callers on `@v2` read the v2 tag's copy). |
 | `actions/artifact/artifact.sh` | The Artifact list `[{"name", "image", "digest"}]`: its shape, the one name → address mapping, its check (the offending entry named), refs. Sourced by the actions below and the workflows; cases in `artifact.test.sh`. |
 | `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Reads the ghcr cache `:buildcache`; only a merge writes it (see "How Build caches"). Output `images`: the Artifact list. The first failing image stops it, named. |
+| `actions/test-compose` | A service's compose tests (`test-compose`): each image of an Artifact list as `IMAGE_<NAME>` (its ref), the compose file's service `test` run with its dependencies, its exit code the result; on a failure the last lines of its output go to the notes (the run's summary). Removes what it started. |
 | `actions/find-artifact` | Re-delivery's Artifact list: for the service's `images` and a commit, the digest each `<image>:<commit-sha>` holds in ghcr; none fails, named. |
 | `actions/scan-image` | Trivy as a pinned container over an Artifact list (build-image's, find-artifact's or promote-image's `images` output as is); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
 | `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change, as the kindorg-ci App (`client-id`, `private-key`). `dry-run` tags nothing and needs no App. |
@@ -373,6 +455,7 @@ Move to v4 directly:
 | `fixtures/hello` | The smallest service (with a `test` stage) that self-test runs the workflows on. |
 | `fixtures/hello-go` | A Go service laid out for the Build cache (dependencies compiled in their own layer): self-test writes its ghcr cache as a merge would, then builds changed code as a PR and checks the dependencies were not compiled again. |
 | `fixtures/hello-worker`, `fixtures/broken` | A second image without a `test` stage, and one whose tests fail: the list form of the image actions in self-test. |
+| `fixtures/compose` | Compose tests with Postgres for self-test: `hello.yml` and `hello-ship.yml` (the `ci` and `ship` jobs' images as is), `pass.yml` and `fail.yml` (a test image built `FROM` the image under test; one passes, one fails with its error in the summary). |
 | `fixtures/gitops` | A homelab-k8s stand-in (hello records 1.4.0; fresh, two images, nothing yet) for the recording cases. |
 | `release-please-config.json`, `.release-please-manifest.json`, `CHANGELOG.md` | This repo's release-please state. |
 

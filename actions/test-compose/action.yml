@@ -1,0 +1,94 @@
+name: Test compose
+description: >
+  The service's tests that need other services (a database): its compose
+  file, run against the images Build just built. Each image of the Artifact
+  list is given to compose as IMAGE_<NAME> (the name upper-cased, `-` and
+  `.` as `_`), set to its ref: image@digest when pushed (ship: pulled by
+  digest, the very one Deliver promotes), the local image when not (pull
+  request: loaded under its address). The compose file's service `test` is
+  run (`docker compose run`, its depends_on started first and waited for);
+  its exit code is the result. The output stays in the step's log; on a
+  failure its last lines go into the run's summary (KINDORG_CI_NOTES).
+  Everything the run started is removed afterwards, volumes included.
+inputs:
+  compose-file:
+    description: Path to the compose file in the service's repo, e.g. compose.test.yml
+    required: true
+  images:
+    description: The Artifact list built in Build, [{"name", "image", "digest"}]
+    required: true
+  lines:
+    description: How many of the last lines of a failing run go into the summary
+    default: "80"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        COMPOSE_FILE_PATH: ${{ inputs.compose-file }}
+        IMAGES: ${{ inputs.images }}
+        LINES: ${{ inputs.lines }}
+        # a test image built FROM ${IMAGE_<NAME>} (compose `build:`) must see
+        # the image loaded locally on a pull request: the docker driver does,
+        # build-image's docker-container builder does not
+        BUILDX_BUILDER: default
+      run: |
+        set -euo pipefail
+        source "$GITHUB_ACTION_PATH/../artifact/artifact.sh"
+        notes=${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}
+        [ -f "$COMPOSE_FILE_PATH" ] || {
+          echo "::error::test-compose: no compose file at ${COMPOSE_FILE_PATH}"
+          echo "**Compose tests:** no compose file at \`${COMPOSE_FILE_PATH}\`." >> "$notes"
+          exit 1; }
+        list=$(artifact_rows test-compose "$IMAGES")
+
+        refs=()
+        while IFS=$'\t' read -r name image digest; do
+          var="IMAGE_$(echo "$name" | tr 'a-z.-' 'A-Z__')"
+          ref=$(artifact_ref "$image" "$digest")
+          export "$var=$ref"
+          echo "${var}=${ref}"
+          refs+=("$ref")
+        done <<< "$list"
+
+        compose=(docker compose --file "$COMPOSE_FILE_PATH" --project-name kindorg-ci-test --ansi never)
+        cleanup() { "${compose[@]}" down --volumes --remove-orphans --timeout 5 > /dev/null 2>&1 || true; }
+        trap cleanup EXIT
+
+        # a ref the compose file never runs as is (e.g. only as a build's
+        # base) is allowed, but said
+        used=$("${compose[@]}" config --images)
+        for ref in "${refs[@]}"; do
+          grep -qxF "$ref" <<< "$used" || echo "::notice::test-compose: no service runs ${ref} as its image (a build FROM it is fine)"
+        done
+
+        # images pulled (missing ones only: on a pull request the image is
+        # local and must stay so) and test images built first, apart, so the
+        # summary's lines are the tests'
+        echo "::group::pull and build"
+        "${compose[@]}" pull --policy missing --ignore-buildable
+        "${compose[@]}" build
+        echo "::endgroup::"
+
+        log=$(mktemp)
+        set +e
+        "${compose[@]}" run --rm -T test 2>&1 | tee "$log"
+        code=${PIPESTATUS[0]}
+        set -e
+        if [ "$code" = 0 ]; then
+          echo "**Compose tests passed** (\`${COMPOSE_FILE_PATH}\`, against ${refs[*]})." >> "$notes"
+          exit 0
+        fi
+        # what the dependencies said, in the log only (a database that did
+        # not come up is the usual cause besides a failing test)
+        echo "::group::logs of the other services"
+        "${compose[@]}" logs --no-color || true
+        echo "::endgroup::"
+        { echo "**Compose tests failed** (\`${COMPOSE_FILE_PATH}\`, service \`test\` exited ${code}). Last ${LINES} lines:"
+          echo ""
+          echo "~~~text"
+          grep -vE '^ (Network|Container|Volume) kindorg-ci-test' "$log" | tail -n "$LINES" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/^~~~/ ~~~/'
+          echo "~~~"
+        } >> "$notes"
+        echo "::error::test-compose: the compose tests failed (service test exited ${code}, ${COMPOSE_FILE_PATH})"
+        exit 1

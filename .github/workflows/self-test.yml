@@ -21,6 +21,7 @@ jobs:
     uses: ./.github/workflows/pull-request.yml
     with:
       images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
+      test-compose: fixtures/compose/hello.yml
       ci-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
   lint:
@@ -218,6 +219,7 @@ jobs:
       app: hello-dry-run
       images: '[{"name": "hello-ship", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
       url: https://hello.example
+      test-compose: fixtures/compose/hello-ship.yml
       ci-ref: ${{ github.event.pull_request.head.sha }}
       dry-run: true
 
@@ -435,6 +437,55 @@ jobs:
           check "lower version" "failure failed record in the fixture GitOps tree" "$DOWN"
           check "no Artifact" "failure failed find the release commit's Artifact" "$MISS"
           check "rescan: false (as Ship gives it), no re-scan" "false" "$DOWN_RESCANNED"
+
+  test-compose:
+    # Compose tests with Postgres (actions/test-compose), as Build runs them
+    # with `test-compose`: an image built and loaded as on a pull request
+    # (hello-compose, its own name), a test image built FROM it with a
+    # Postgres client — one compose file whose test passes, one whose test
+    # fails; the failure fails the step and its error reaches the notes the
+    # run's summary is made of. The workflows run it too: `ci` (the image as
+    # is, loaded) and `ship` (pulled by digest).
+    name: "Build: compose tests run against the built image"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: build
+        uses: ./actions/build-image
+        with:
+          images: '[{"name": "hello-compose", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
+      - name: A passing compose test
+        uses: ./actions/test-compose
+        with:
+          compose-file: fixtures/compose/pass.yml
+          images: ${{ steps.build.outputs.images }}
+      - id: fail
+        name: A failing compose test
+        continue-on-error: true
+        uses: ./actions/test-compose
+        with:
+          compose-file: fixtures/compose/fail.yml
+          images: ${{ steps.build.outputs.images }}
+      - name: The failure fails the step, its error in the notes
+        env:
+          OUTCOME: ${{ steps.fail.outcome }}
+        run: |
+          set -euo pipefail
+          cat "$KINDORG_CI_NOTES"
+          [ "$OUTCOME" = "failure" ] || { echo "::error::a failing compose test must fail the step, got $OUTCOME"; exit 1; }
+          grep -qF "**Compose tests passed** (\`fixtures/compose/pass.yml\`" "$KINDORG_CI_NOTES" || { echo "::error::no pass note"; exit 1; }
+          grep -qF "**Compose tests failed** (\`fixtures/compose/fail.yml\`" "$KINDORG_CI_NOTES" || { echo "::error::no failure note"; exit 1; }
+          grep -q 'relation "no_such_table" does not exist' "$KINDORG_CI_NOTES" || { echo "::error::the failing test's error is not in the notes"; exit 1; }
+          [ -z "$(docker ps -aq --filter label=com.docker.compose.project=kindorg-ci-test)" ] || { echo "::error::containers left behind"; exit 1; }
+          echo "pass passes, fail fails with its error in the summary, nothing left running: ok"
 
   image-list:
     # The list form the workflows use — one job per Stage, images looped

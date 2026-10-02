@@ -1,0 +1,20 @@
+# hello-ship's compose tests (self-test's `ship` job: ship.yml,
+# input test-compose): the image Build built, pulled by digest
+# (${IMAGE_HELLO_SHIP}), next to a Postgres it reaches by its service name. The
+# service `test` is what runs; its exit code is the result.
+services:
+  db:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  test:
+    image: ${IMAGE_HELLO_SHIP:?set by the golden path}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "grep -q hello /hello.txt && nc -z db 5432 && echo 'hello reaches its database: ok'"]

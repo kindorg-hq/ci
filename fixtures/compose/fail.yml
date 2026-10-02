@@ -1,0 +1,36 @@
+# Self-test of actions/test-compose: a compose test with Postgres that
+# fails: it queries a table that does not exist (the error must reach the
+# summary). The test image is built FROM the image Build built
+# (${IMAGE_HELLO_COMPOSE}) with a Postgres client added — the way a service
+# whose image lacks its test tools runs them (README, "Tests that need a
+# database").
+services:
+  db:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  test:
+    build:
+      dockerfile_inline: |
+        FROM ${IMAGE_HELLO_COMPOSE:?set by the golden path}
+        RUN apk add --no-cache postgresql17-client
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: test
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - sh
+      - -ec
+      - |
+        psql -v ON_ERROR_STOP=1 -c "CREATE TABLE greetings (text text)"
+        psql -v ON_ERROR_STOP=1 -c "INSERT INTO greetings VALUES ('$$(cat /hello.txt | cut -d' ' -f1)')"
+        test "$$(psql -tA -v ON_ERROR_STOP=1 -c "SELECT * FROM no_such_table")" = 1
+        echo "hello is in the database: ok"
