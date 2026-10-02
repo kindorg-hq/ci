@@ -43,7 +43,7 @@ on:
         default: CRITICAL
       ci-ref:
         type: string
-        default: v2
+        default: v3
     outputs:
       gitops-pr:
         value: ${{ jobs.gitops.outputs.pr-url }}
