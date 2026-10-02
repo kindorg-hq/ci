@@ -19,6 +19,7 @@ jobs:
     # included); the jobs that push packages or deliver run on PRs only
     permissions:
       contents: read
+      actions: read
       pull-requests: write
       packages: write
       deployments: write
