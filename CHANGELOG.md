@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.0](https://github.com/kindorg-hq/ci/compare/v4.1.1...v4.2.0) (2026-10-02)
+
+
+### Features
+
+* **#66:** Build runs a service's compose tests against the built images ([#67](https://github.com/kindorg-hq/ci/issues/67)) ([1c44e40](https://github.com/kindorg-hq/ci/commit/1c44e4000960a693260bc9d90f25fdaa485da722))
+
 ## [4.1.1](https://github.com/kindorg-hq/ci/compare/v4.1.0...v4.1.1) (2026-10-02)
 
 
