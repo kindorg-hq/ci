@@ -53,7 +53,13 @@ A service has three workflows, one per event: `pull-request.yml`,
   request; on Ship and re-delivery a heading — "Ship vX.Y.Z", "Ship <sha7>:
   nothing to release", "Re-deliver vX.Y.Z", or "…: failed at <step>" — then
   the Release, commit, digests and GitOps PR, and what each step said,
-  collapsed.
+  collapsed. Steps never write summaries of their own: they write to the
+  file `KINDORG_CI_NOTES` names, and the summary folds those notes in; a
+  failed Build writes the summary itself, since nothing after it runs. The
+  one known extra block is harden-runner's StepSecurity insights, one per
+  job, below it: harden-runner (audit) adds it from its post step and has no
+  input to turn it off (`disable-telemetry` only applies with
+  `egress-policy: block`).
 
 ```sh
 gh run list --workflow ship.yml --limit 5      # name, status, per merge

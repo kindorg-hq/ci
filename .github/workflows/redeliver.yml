@@ -48,7 +48,7 @@
 # concurrency group with Ship: a re-delivery waits for a Ship's Deliver of the
 # same service, and the other way round.
 #
-# Runs as the kindorg-ci GitHub App for the GitOps PR: vars.KINDORG_CI_APP_ID
+# Runs as the kindorg-ci GitHub App for the GitOps PR: vars.KINDORG_CI_CLIENT_ID
 # (org variable) and secrets.KINDORG_CI_APP_KEY.
 name: redeliver
 
@@ -148,7 +148,7 @@ jobs:
           environment-url: ${{ inputs.url }}
           trivy-severity: ${{ inputs.trivy-severity }}
           dry-run: ${{ inputs.dry-run }}
-          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          client-id: ${{ vars.KINDORG_CI_CLIENT_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
           token: ${{ github.token }}
 
