@@ -97,6 +97,18 @@ pipeline the same way (Integrate and Rehearse have no environments here yet).
 the Artifact built and scanned on merge. A Release only adds a tag to its digest
 (`crane tag`; the digest is checked unchanged).
 
+**The Artifact list** carries the images from Build to the GitOps record, one
+shape throughout: `[{"name", "image", "digest"}]`, where `image` is the full
+address without tag (`ghcr.io/<owner>/<name>`) and a ref is `image@digest`
+(on a pull request, nothing pushed: no digest, the image loaded locally under
+its address). It is made once — by Build from the service's `images`, and on
+re-delivery by `find-artifact` from the release commit — and only read
+afterwards: promote adds the version tag and returns it unchanged, the
+accepted = promoted check compares two lists as strings, scan, the digest pin
+and the Application annotations read `image` and `digest` from it. The shape,
+the one place a name becomes an address and the one check of the list (a
+malformed one fails naming the entry) live in `actions/artifact/artifact.sh`.
+
 ## Connect a service
 
 Three files in the service's `.github/workflows/`, one per event. Keep the job
@@ -269,17 +281,19 @@ Move to v4 directly:
 | --- | --- |
 | `.github/workflows/pull-request.yml` | What a service's pull request runs: `Build` (Dockerfile `test` stage, then every image, loaded locally and handed to Accept) → `Accept` (image scan, PR title, gitleaks, dependency review — each a step, all run, the failing one named; a summary of all four). Publishes nothing, needs no secrets. |
 | `.github/workflows/ship.yml` | What a merge runs: `Build` (`test` stage, then every image pushed as `:<commit-sha>`) → `Accept` (Trivy over them) → `Deliver` (cut release, promote — digests checked against what Accept scanned —, re-scan, GitOps PR, report on the PRs; each a step, in the concurrency group `golden-path-deliver-<owner/repo>`). One summary, from Deliver. `dry-run` for self-test. |
-| `.github/workflows/redeliver.yml` | Re-delivery, by hand (`workflow_dispatch`): one job, `Deliver` — find the latest Release, promote that commit's Artifact (nothing rebuilt; none there fails), re-scan, GitOps PR, report; in Ship's concurrency group. A version already recorded changes nothing in homelab-k8s and leaves comments and the `production` deployment as they are. From promote to report its steps are Ship's Deliver steps (self-test compares them). `dry-run` for self-test. |
-| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), Ship's and re-delivery's Deliver steps the same, the list form of the image actions (two images in one job, one failing), the no-downgrade and Application annotation cases, actionlint. |
+| `.github/workflows/redeliver.yml` | Re-delivery, by hand (`workflow_dispatch`): one job, `Deliver` — find the latest Release and that commit's Artifact (nothing rebuilt; none there fails), promote it, re-scan, GitOps PR, report; in Ship's concurrency group. A version already recorded changes nothing in homelab-k8s and leaves comments and the `production` deployment as they are. From promote to report its steps are Ship's Deliver steps (self-test compares them). `dry-run` for self-test. |
+| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), Ship's and re-delivery's Deliver steps the same, the list form of the image actions (two images in one job, one failing; found again by commit), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `.github/workflows/release.yml` | release-please, for this repo's own releases (callers on `@v2` read the v2 tag's copy). |
-| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Output `images`: `[{"name", "ref", "digest"}]`. The first failing image stops it, named. |
-| `actions/scan-image` | Trivy as a pinned container over a list of images (`images`: JSON `[{"name", "ref"}]`, build-image's or promote-image's `images` output as is); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
+| `actions/artifact/artifact.sh` | The Artifact list `[{"name", "image", "digest"}]`: its shape, the one name → address mapping, its check (the offending entry named), refs. Sourced by the actions below and the workflows; cases in `artifact.test.sh`. |
+| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Output `images`: the Artifact list. The first failing image stops it, named. |
+| `actions/find-artifact` | Re-delivery's Artifact list: for the service's `images` and a commit, the digest each `<image>:<commit-sha>` holds in ghcr; none fails, named. |
+| `actions/scan-image` | Trivy as a pinned container over an Artifact list (build-image's, find-artifact's or promote-image's `images` output as is); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
 | `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change. `dry-run` tags nothing. |
-| `actions/promote-image` | Add the version tag to the Artifact of a commit with crane, for a list of images (`images`: JSON `[{"name"}]`); fails if a digest changed, naming the image. Output `images`: `[{"name", "image", "ref", "digest"}]`. |
-| `actions/gitops-pr` | Open, wait for and merge the PR to `manifests/<app>/base` and `apps/<app>.yaml` in homelab-k8s: digests pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`, cases in `annotate-app.test.sh`). Refuses a lower version first (`no-downgrade.sh`, cases in `no-downgrade.test.sh`). |
+| `actions/promote-image` | Add the version tag to each `image@digest` of an Artifact list with crane; fails if a digest changed, naming the image. Output `images`: the list as read back, the same as its input. |
+| `actions/gitops-pr` | Open, wait for and merge the PR to `manifests/<app>/base` and `apps/<app>.yaml` in homelab-k8s: each `image@digest` of the Artifact list pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`, cases in `annotate-app.test.sh`). Refuses a lower version first (`no-downgrade.sh`, cases in `no-downgrade.test.sh`). |
 | `actions/report-delivery` | `released` label and one "recorded" comment on every PR of the Release; `production` deployment of the release commit, `in_progress`. |
-| `actions/delivery-summary` | The one summary of a Ship or re-deliver run: version, commit, digests, Release, GitOps PR, what comes next; the failing step when one failed. The workflows set `KINDORG_CI_NOTES` to a file, and build-image, cut-release, promote-image, gitops-pr and report-delivery write their notes there instead of their own step summaries; this action folds them in, collapsed. Unset, they write step summaries. |
+| `actions/delivery-summary` | The one summary of a Ship or re-deliver run: version, commit, digests, Release, GitOps PR, what comes next; the failing step when one failed. The workflows set `KINDORG_CI_NOTES` to a file, and build-image, cut-release, find-artifact, promote-image, gitops-pr and report-delivery write their notes there instead of their own step summaries; this action folds them in, collapsed. Unset, they write step summaries. |
 | `fixtures/hello` | The smallest service (with a `test` stage) that self-test runs the workflows on. |
 | `fixtures/hello-worker`, `fixtures/broken` | A second image without a `test` stage, and one whose tests fail: the list form of the image actions in self-test. |
 | `fixtures/gitops` | A GitOps repo stand-in for the no-downgrade and annotation cases. |
@@ -344,6 +358,11 @@ Move to v4 directly:
   run as containers pinned by digest rather than third-party actions.
 
 ## Versioning of this repo
+
+The public interface is the three workflows — `pull-request.yml`, `ship.yml`,
+`redeliver.yml` — with their inputs and job names (the check names). The
+`actions/` are internal to them: a service never calls one, so changing an
+action's inputs or outputs is not a breaking release.
 
 This repo does not ship the way its services do: its version is a promise to
 every service, so a human merges its release PR. On push to main

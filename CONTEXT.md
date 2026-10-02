@@ -18,7 +18,7 @@ What every pull request of a service must pass before it may merge: its tests pa
 _Avoid_: CI (too broad — the service's own tests are CI too), gates
 
 **Artifact**:
-The image built once, on merge to the main branch, tagged with its commit SHA and scanned. Identified by its digest. Nothing after the merge rebuilds it: a Release promotes this exact artifact.
+The image built once, on merge to the main branch, tagged with its commit SHA and scanned. Identified by its full image address and digest (`ghcr.io/<owner>/<name>@sha256:…`). Nothing after the merge rebuilds it: a Release promotes this exact artifact. A service's Artifacts travel from Build to the GitOps record as one list, the same shape throughout.
 _Avoid_: build, image (an image can be rebuilt; an artifact is the one that was)
 
 **Release**:

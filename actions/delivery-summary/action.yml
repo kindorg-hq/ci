@@ -25,7 +25,7 @@ inputs:
     description: The commit built, or the release commit
     required: true
   images:
-    description: 'JSON list of {"name", "digest"}: promoted, or accepted when nothing was delivered'
+    description: 'The Artifact list (actions/artifact/artifact.sh): promoted, or accepted when nothing was delivered'
     default: "[]"
   gitops-pr:
     description: The GitOps PR merged by this run; empty when nothing new was recorded

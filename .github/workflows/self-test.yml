@@ -74,6 +74,25 @@ jobs:
           persist-credentials: false
       - run: bash actions/gitops-pr/annotate-app.test.sh
 
+  artifact-list:
+    # The Artifact list, {name, image, digest} per image, made once and only
+    # read afterwards (actions/artifact/artifact.sh): the one name → address
+    # mapping, a ref is image@digest, a malformed list fails naming the
+    # entry, a list read and written again is byte for byte the same (the
+    # accepted = promoted check compares two lists as strings). Cases in
+    # artifact.test.sh.
+    name: "Accept: the Artifact list has one shape"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash actions/artifact/artifact.test.sh
+
   ship:
     # Ship as a service calls it, on the fixture: `ship / Build` (the `test`
     # stage, the image pushed as :<sha>) → `ship / Accept` (Trivy over the
@@ -114,20 +133,24 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
           TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
           CRANE: gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1
         run: |
           set -euo pipefail
+          # shellcheck source=/dev/null
+          source actions/artifact/artifact.sh
           tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
           sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)
           cfg=$(mktemp -d)
           run=(docker run --rm -u "$(id -u):$(id -g)" -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg)
           echo "$TOKEN" | "${run[@]}" -i "$CRANE" auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          from="ghcr.io/${OWNER,,}/hello-ship:${GITHUB_SHA}"
-          to="ghcr.io/${OWNER,,}/hello-redeliver:${sha}"
+          from="$(artifact_image hello-ship):${GITHUB_SHA}"
+          to="$(artifact_image hello-redeliver):${sha}"
           "${run[@]}" "$CRANE" copy "$from" "$to"
           echo "$tag ($sha): $to = $("${run[@]}" "$CRANE" digest "$to")"
           rm -rf "$cfg"
@@ -172,10 +195,12 @@ jobs:
         run: |
           set -euo pipefail
           yq() { docker run --rm -i -v "$PWD:/repo:ro" -w /repo "$YQ" "$@"; }
-          # the Deliver job (but for Ship's needs and what it promotes) and
-          # its steps promote, rescan, gitops, report; JSON drops the comments
-          q='.jobs.deliver | del(.needs) | del(.env.DELIVER_IMAGES)
-             | .steps |= map(select(.id == "promote" or .id == "rescan" or .id == "gitops" or .id == "report"))'
+          # the Deliver job (but for Ship's needs) and its steps promote (but
+          # for which Artifact list it promotes), rescan, gitops, report; JSON
+          # drops the comments
+          q='.jobs.deliver | del(.needs)
+             | .steps |= map(select(.id == "promote" or .id == "rescan" or .id == "gitops" or .id == "report"))
+             | del(.steps[] | select(.id == "promote") | .with.images)'
           yq -o json "$q" .github/workflows/ship.yml > "$RUNNER_TEMP/ship.json"
           yq -o json "$q" .github/workflows/redeliver.yml > "$RUNNER_TEMP/redeliver.json"
           [ "$(yq -o json '.steps | map(.id) | join(" ")' < "$RUNNER_TEMP/ship.json")" = '"promote rescan gitops report"' ] || {
@@ -190,9 +215,10 @@ jobs:
     # its `test` stage, and hello-worker without one; own names, so no other
     # job's image is pushed under them) built and
     # loaded, then scanned in one step; a list whose second image fails its
-    # tests stops the build; then built, pushed, scanned, and promoted in one
-    # step each, the digests unchanged, every action's `images` output fed to
-    # the next as is.
+    # tests stops the build; then built, pushed, scanned, found again by
+    # commit (re-delivery's find-artifact) and promoted in one step each, the
+    # Artifact list unchanged throughout, every action's `images` output fed
+    # to the next as is.
     name: "Build, Accept, Deliver: a list of images in one job"
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
@@ -221,9 +247,10 @@ jobs:
         run: |
           set -euo pipefail
           echo "$OUT"
-          want='[{"name":"hello-list","ref":"local/hello-list:check","digest":""},{"name":"hello-worker","ref":"local/hello-worker:check","digest":""}]'
+          image() { echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$1"; }
+          want="[{\"name\":\"hello-list\",\"image\":\"$(image hello-list)\",\"digest\":\"\"},{\"name\":\"hello-worker\",\"image\":\"$(image hello-worker)\",\"digest\":\"\"}]"
           [ "$OUT" = "$want" ] || { echo "::error::images output: want $want"; exit 1; }
-          docker image inspect local/hello-list:check local/hello-worker:check > /dev/null
+          docker image inspect "$(image hello-list)" "$(image hello-worker)" > /dev/null
       - uses: ./actions/scan-image
         with:
           images: ${{ steps.check.outputs.images }}
@@ -251,27 +278,34 @@ jobs:
         with:
           images: ${{ steps.build.outputs.images }}
           token: ${{ github.token }}
+      # re-delivery's way to the same list: found by the commit's tag
+      - id: find
+        uses: ./actions/find-artifact
+        with:
+          images: ${{ env.IMAGES }}
+          sha: ${{ github.sha }}
+          token: ${{ github.token }}
       - id: promote
         uses: ./actions/promote-image
         with:
-          images: ${{ steps.build.outputs.images }}
-          from-tag: ${{ github.sha }}
+          images: ${{ steps.find.outputs.images }}
           to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-list
           token: ${{ github.token }}
       - env:
           BUILT: ${{ steps.build.outputs.images }}
+          FOUND: ${{ steps.find.outputs.images }}
           PROMOTED: ${{ steps.promote.outputs.images }}
         run: |
           set -euo pipefail
           jq() { docker run --rm -i "$JQ" "$@"; }
           echo "built:    $BUILT"
+          echo "found:    $FOUND"
           echo "promoted: $PROMOTED"
-          built=$(echo "$BUILT" | jq -c 'map({name, digest})')
-          promoted=$(echo "$PROMOTED" | jq -c 'map({name, digest})')
-          [ "$(echo "$built" | jq 'length')" = 2 ] || { echo "::error::want two built images"; exit 1; }
-          [ "$(echo "$built" | jq 'all(.[]; .digest | startswith("sha256:"))')" = true ] || { echo "::error::a pushed image has no digest"; exit 1; }
-          [ "$built" = "$promoted" ] || { echo "::error::promotion changed a digest: $built → $promoted"; exit 1; }
-          echo "two images promoted, digests unchanged: ok"
+          [ "$(echo "$BUILT" | jq 'length')" = 2 ] || { echo "::error::want two built images"; exit 1; }
+          [ "$(echo "$BUILT" | jq 'all(.[]; .digest | startswith("sha256:"))')" = true ] || { echo "::error::a pushed image has no digest"; exit 1; }
+          [ "$BUILT" = "$FOUND" ] || { echo "::error::the list found by commit differs from Build's: $BUILT → $FOUND"; exit 1; }
+          [ "$BUILT" = "$PROMOTED" ] || { echo "::error::promotion changed the list: $BUILT → $PROMOTED"; exit 1; }
+          echo "two images found by commit and promoted, the Artifact list unchanged: ok"
       # what Deliver re-scans: the promoted list as is
       - uses: ./actions/scan-image
         with:

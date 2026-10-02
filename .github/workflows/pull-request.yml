@@ -19,7 +19,8 @@
 # workflow's own is ignored); its graph is `ci / Build` → `ci / Accept`, the
 # two checks the service's ruleset requires.
 #   Build   the Dockerfile's `test` stage (when it has one), then each image,
-#           loaded locally as local/<name>:check — tests or image fails Build.
+#           loaded locally under its address (nothing pushed) — tests or image
+#           fails Build.
 #   Accept  each its own step, all run even when one fails, the failing one
 #           named: image scan (Trivy, CRITICAL with a fix), PR title names its
 #           change and work item, no secrets in the change (gitleaks), no
@@ -86,10 +87,11 @@ jobs:
         if: inputs.images != '[]'
         env:
           IMAGES: ${{ steps.build.outputs.images }}
-          JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
         run: |
           set -euo pipefail
-          mapfile -t refs < <(echo "$IMAGES" | docker run --rm -i "$JQ" -r '.[].ref')
+          source .kindorg-ci/actions/artifact/artifact.sh
+          refs=$(artifact_refs "save the images" "$IMAGES")
+          mapfile -t refs <<< "$refs"
           docker save "${refs[@]}" -o /tmp/pr-images.tar
       - if: inputs.images != '[]'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

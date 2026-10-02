@@ -11,7 +11,8 @@
 #   SOURCE_REPO      https://github.com/<owner>/<service>
 #   SOURCE_SHA       the release commit, full SHA
 #   VERSION          X.Y.Z
-#   IMAGES           the pinned images, space separated: <name>@sha256:<64 hex>
+#   IMAGES           the pinned images, space separated: <image>@sha256:<64 hex>
+#                    (the refs of the Artifact list, actions/artifact/artifact.sh)
 #                    — exactly as the pods will run them
 #   ENVIRONMENT_URL  where the service answers; optional (removed when empty)
 #

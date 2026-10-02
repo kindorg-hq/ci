@@ -25,8 +25,11 @@
 # the caller's and static: the version is known only once the run has found
 # the Release (and a reusable workflow's own run-name is ignored).
 #   Find the latest Release   its tag, URL and commit (gh release view)
-#   Promote                   ghcr.io/<owner>/<name>:<release-commit-sha> → :X.Y.Z,
-#                             same digest; no Artifact for that commit fails here
+#   Find its Artifact         ghcr.io/<owner>/<name>:<release-commit-sha> per
+#                             image, as the Artifact list Build made for it
+#                             (actions/find-artifact); none for that commit
+#                             fails here
+#   Promote                   that list → :X.Y.Z, same digest
 #   then as in Ship: re-scan, record in homelab-k8s (GitOps PR: no downgrade,
 #   pinned by digest, the Release on the Application, an open PR of an earlier
 #   attempt reused, checks waited for, merged), report on the PRs.
@@ -37,8 +40,9 @@
 #
 # Ship's Deliver job and this one are kept step for step the same from promote
 # to report (self-test compares them); they differ in how they get the Release
-# (cut it / find the latest) and in the check after promote (the accepted
-# digests / the Artifact exists). One concurrency group with Ship: a
+# (cut it / find the latest), in where the Artifact list comes from (Build /
+# found in ghcr for the release commit) and in the check after promote (the
+# list Accept scanned / the list found). One concurrency group with Ship: a
 # re-delivery waits for a Ship's Deliver of the same service, and the other way
 # round.
 #
@@ -101,8 +105,6 @@ jobs:
       KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
       # what a dry run promotes to instead of the version
       DRY_RUN_TAG: 0.0.0-dry-run-${{ github.event.pull_request.number || github.run_id }}
-      # what is promoted: the service's images, as built for the release commit
-      DELIVER_IMAGES: ${{ inputs.images }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -130,40 +132,41 @@ jobs:
           { echo "deliver=true"; echo "version=${tag#v}"; echo "tag=$tag"; echo "url=$url"
             echo "sha=$sha"; echo "ref=$tag"; } >> "$GITHUB_OUTPUT"
           echo "Re-delivering the latest Release, [$tag]($url), commit \`$sha\`: its Artifact is promoted again, nothing is rebuilt." | tee -a "$KINDORG_CI_NOTES"
+      # nothing is built in this run: the Artifact list is the one Build made
+      # for the release commit on merge, found under :<release-commit-sha>
+      - id: artifact
+        name: Find the release commit's Artifact
+        if: steps.release.outputs.deliver == 'true'
+        uses: ./.kindorg-ci/actions/find-artifact
+        with:
+          images: ${{ inputs.images }}
+          sha: ${{ steps.release.outputs.sha }}
+          token: ${{ github.token }}
 
       # From here to the summary, ship.yml and redeliver.yml run the same
-      # steps (self-test compares them), but for the check after promote.
+      # steps (self-test compares them), but for what is promoted and the
+      # check after promote. Promoted: the Artifact list found above.
       - id: promote
         name: Promote :<commit-sha> to the version, same digest
         if: steps.release.outputs.deliver == 'true'
         uses: ./.kindorg-ci/actions/promote-image
         with:
-          images: ${{ env.DELIVER_IMAGES }}
-          from-tag: ${{ steps.release.outputs.sha }}
+          images: ${{ steps.artifact.outputs.images }}
           to-tag: ${{ inputs.dry-run && env.DRY_RUN_TAG || steps.release.outputs.version }}
           token: ${{ github.token }}
-      # nothing was built in this run: what is delivered is the Artifact built
-      # (and accepted) for the release commit on merge — promote found it under
-      # :<release-commit-sha>, or failed
+      # what is delivered is the Artifact built (and accepted) for the release
+      # commit on merge, byte for byte
       - id: same
         name: The promoted images are the release commit's Artifact
         if: steps.promote.outcome == 'success'
         env:
-          WANTED: ${{ env.DELIVER_IMAGES }}
+          FOUND: ${{ steps.artifact.outputs.images }}
           PROMOTED: ${{ steps.promote.outputs.images }}
-          SHA: ${{ steps.release.outputs.sha }}
-          JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
         run: |
-          set -euo pipefail
-          jq() { docker run --rm -i "$JQ" "$@"; }
-          wanted=$(echo "$WANTED" | jq -c 'map(.name)')
-          promoted=$(echo "$PROMOTED" | jq -c 'map(.name)')
-          [ "$wanted" = "$promoted" ] || {
-            echo "::error::promoted $promoted, want $wanted"; exit 1; }
-          echo "$PROMOTED" | jq -e 'all(.[]; .digest | test("^sha256:[0-9a-f]{64}$"))' > /dev/null || {
-            echo "::error::a promoted image has no digest: $PROMOTED"; exit 1; }
-          echo "The Artifact of \`${SHA:0:7}\` exists and is what gets delivered, nothing rebuilt:" | tee -a "$KINDORG_CI_NOTES"
-          echo "$PROMOTED" | jq -r --arg sha "$SHA" '.[] | "- `\(.image):\($sha)` = `\(.digest)`"' | tee -a "$KINDORG_CI_NOTES"
+          # two Artifact lists, compared as they are
+          [ "$FOUND" = "$PROMOTED" ] || {
+            echo "::error::promoted images differ from the release commit's Artifact: $FOUND → $PROMOTED"; exit 1; }
+          echo "$PROMOTED"
       - id: rescan
         name: Re-scan the promoted images
         if: steps.same.outcome == 'success'
@@ -214,10 +217,11 @@ jobs:
           version: ${{ steps.release.outputs.version }}
           release-url: ${{ steps.release.outputs.url }}
           sha: ${{ steps.release.outputs.sha || github.sha }}
-          images: ${{ steps.promote.outputs.images }}
+          images: ${{ steps.promote.outputs.images || steps.artifact.outputs.images }}
           gitops-pr: ${{ steps.gitops.outputs.pr-url }}
           failed: >-
             ${{ steps.release.outcome == 'failure' && 'find the latest Release' ||
+            steps.artifact.outcome == 'failure' && 'find the release commit''s Artifact' ||
             steps.promote.outcome == 'failure' && 'promote' ||
             steps.same.outcome == 'failure' && 'the promoted images are the release commit''s Artifact' ||
             steps.rescan.outcome == 'failure' && 're-scan' ||
