@@ -11,7 +11,7 @@ cp "$root/fixtures/gitops/apps/hello.yaml" "$work/hello.yaml"
 file="$work/hello.yaml"
 failed=0
 
-yq() { docker run --rm -i -v "$work:/work" -w /work \
+yq() { docker run --rm -i -u "$(id -u):$(id -g)" -v "$work:/work" -w /work \
   mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e "$@"; }
 check() { # check <why> <want> <got>
   if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want '$2', got '$3'"; failed=1; fi
