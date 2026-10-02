@@ -37,8 +37,10 @@ runs:
       run: |
         set -euo pipefail
         cfg=$(mktemp -d)
-        crane() { docker run --rm -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg "$CRANE" "$@"; }
-        echo "$TOKEN" | docker run --rm -i -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg "$CRANE" \
+        # as the runner's user: the credentials dir is private (mktemp -d, 0700)
+        run=(docker run --rm -u "$(id -u):$(id -g)" -v "$cfg:/cfg" -e DOCKER_CONFIG=/cfg)
+        crane() { "${run[@]}" "$CRANE" "$@"; }
+        echo "$TOKEN" | "${run[@]}" -i "$CRANE" \
           auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
         built=$(crane digest "${IMAGE}:${FROM}") || {
           echo "::error::no artifact ${IMAGE}:${FROM} — was it built on merge to the main branch?"; exit 1; }
