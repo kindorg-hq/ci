@@ -26,6 +26,12 @@
 #           change and work item, no secrets in the change (gitleaks), no
 #           vulnerable dependencies added (public repos only: private ones need
 #           GitHub Advanced Security, so the step is skipped, not failed).
+# One summary per run, Accept's: Build's notes (tests passed or none) and the
+# dependency findings go into it, not into step summaries of their own; if
+# Build fails, Accept never runs and Build writes the summary instead. The
+# one exception is harden-runner's StepSecurity block (AGENTS.md, "Reading a
+# run"). The images go from Build to Accept as the artifact `pr-images`
+# (a docker save, tens of MB): kept 1 day, the shortest GitHub allows.
 # No secrets needed: Dependabot PRs get none.
 name: pull-request
 
@@ -61,8 +67,12 @@ jobs:
     name: Build
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
+    # the actions' notes go here, into Accept's summary — not into their own
+    env:
+      KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
     outputs:
       images: ${{ steps.build.outputs.images }}
+      notes: ${{ steps.notes.outputs.notes }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -98,13 +108,32 @@ jobs:
         with:
           name: pr-images
           path: /tmp/pr-images.tar
+          # only Accept, minutes later, reads it: 1 day, the shortest allowed
           retention-days: 1
+      # for the run's one summary, written by Accept
+      - id: notes
+        name: Notes for the summary
+        if: always()
+        run: |
+          set -euo pipefail
+          eof="EOF_$(openssl rand -hex 8)"
+          { echo "notes<<$eof"; cat "$KINDORG_CI_NOTES" 2>/dev/null || true; echo "$eof"; } >> "$GITHUB_OUTPUT"
+      # Build failed: Accept will not run, so the run's one summary is this
+      - name: Summary
+        if: failure()
+        run: |
+          { echo "### Build failed"
+            echo "Accept did not run. The failing step's log names the cause."
+            if [ -s "$KINDORG_CI_NOTES" ]; then echo; cat "$KINDORG_CI_NOTES"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   accept:
     name: Accept
     needs: build
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
+    env:
+      KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -171,18 +200,45 @@ jobs:
           docker run --rm -v "$PWD:/repo" "$GITLEAKS" git /repo \
             --log-opts="$range" --redact --no-banner --exit-code 1
 
-      # needs GitHub Advanced Security on private repos, free on public ones
+      # GitHub's dependency review (the API dependency-review-action calls,
+      # without the action's own summary block): a dependency this PR adds
+      # with a high or critical advisory fails. Needs GitHub Advanced
+      # Security on private repos, free on public ones.
       - id: dependencies
         name: No vulnerable dependencies added
         if: ${{ !cancelled() && github.event_name == 'pull_request' && !github.event.repository.private }}
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: high
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
+        run: |
+          set -euo pipefail
+          jq() { docker run --rm -i "$JQ" "$@"; }
+          changes=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/dependency-graph/compare/${BASE}...${HEAD}" | jq -s 'add // []')
+          added=$(echo "$changes" | jq '[.[] | select(.change_type == "added")] | length')
+          found=$(echo "$changes" | jq -r '.[] | select(.change_type == "added") | . as $d
+            | (.vulnerabilities // [])[] | select(.severity == "high" or .severity == "critical")
+            | "| `\($d.name)@\($d.version)` (\($d.manifest)) | \(.severity) | [\(.advisory_ghsa_id)](\(.advisory_url)) \(.advisory_summary) |"')
+          if [ -z "$found" ]; then
+            echo "**Dependencies:** $added added, none with a high or critical advisory." | tee -a "$KINDORG_CI_NOTES"
+            exit 0
+          fi
+          { echo "**Dependencies added with a high or critical advisory:**"
+            echo ""
+            echo "| Dependency | Severity | Advisory |"
+            echo "| --- | --- | --- |"
+            echo "$found"
+          } | tee -a "$KINDORG_CI_NOTES"
+          echo "::error::vulnerable dependencies added: $(echo "$found" | wc -l) high or critical advisories"
+          exit 1
 
-      # the run's one summary: what Accept checked, and how each went
+      # the run's one summary: what Accept checked, how each went, and what
+      # Build and the checks noted
       - name: Summary
         if: ${{ !cancelled() }}
         env:
+          NOTES: ${{ needs.build.outputs.notes }}
           SCAN: ${{ steps.scan.outcome }}
           TITLE: ${{ steps.title.outcome }}
           SECRETS: ${{ steps.secrets.outcome }}
@@ -208,4 +264,14 @@ jobs:
             echo "| PR title names its change and work item | $(mark "$TITLE" "not a pull request") |"
             echo "| No secrets in the change | $(mark "$SECRETS") |"
             echo "| No vulnerable dependencies added | $(mark "$DEPENDENCIES" "$dep_why") |"
+            if [ -n "$NOTES" ] || [ -s "$KINDORG_CI_NOTES" ]; then
+              echo ""
+              echo "<details><summary>What each step said</summary>"
+              echo ""
+              [ -z "$NOTES" ] || echo "$NOTES"
+              echo ""
+              [ ! -s "$KINDORG_CI_NOTES" ] || cat "$KINDORG_CI_NOTES"
+              echo ""
+              echo "</details>"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

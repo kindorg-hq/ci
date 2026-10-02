@@ -56,7 +56,7 @@
 # own step summaries, so the run has one summary.
 #
 # Runs as the kindorg-ci GitHub App to tag the Release and for the GitOps PR:
-# vars.KINDORG_CI_APP_ID (org variable) and secrets.KINDORG_CI_APP_KEY.
+# vars.KINDORG_CI_CLIENT_ID (org variable) and secrets.KINDORG_CI_APP_KEY.
 name: ship
 
 on:
@@ -140,6 +140,14 @@ jobs:
           set -euo pipefail
           eof="EOF_$(openssl rand -hex 8)"
           { echo "notes<<$eof"; cat "$KINDORG_CI_NOTES" 2>/dev/null || true; echo "$eof"; } >> "$GITHUB_OUTPUT"
+      # Build failed: Deliver will not run, so the run's one summary is this
+      - name: Summary
+        if: failure()
+        run: |
+          { echo "## Ship ${GITHUB_SHA:0:7}: failed at Build"
+            echo "Accept and Deliver did not run; the failing step's log names the cause."
+            if [ -s "$KINDORG_CI_NOTES" ]; then echo; cat "$KINDORG_CI_NOTES"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   accept:
     name: Accept
@@ -220,7 +228,7 @@ jobs:
         uses: ./.kindorg-ci/actions/cut-release
         with:
           dry-run: ${{ inputs.dry-run }}
-          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          client-id: ${{ vars.KINDORG_CI_CLIENT_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
       # Delivery, all of it (actions/deliver, as re-delivery runs it): the
       # Artifact Build pushed and Accept scanned, promoted, recorded,
@@ -242,7 +250,7 @@ jobs:
           app: ${{ inputs.app }}
           environment-url: ${{ inputs.url }}
           dry-run: ${{ inputs.dry-run }}
-          app-id: ${{ vars.KINDORG_CI_APP_ID }}
+          client-id: ${{ vars.KINDORG_CI_CLIENT_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
           token: ${{ github.token }}
 

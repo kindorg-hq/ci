@@ -119,7 +119,12 @@ Here: no separate Security team, so the guardrails are the Checks and least
 privilege. Each Work item states what done looks like. Least privilege: two
 GitHub Apps (`kindorg-ci` releases and records, `kindorg-argocd` reports
 running), minimal workflow permissions, `persist-credentials: false`, no
-secrets on Dependabot PRs.
+secrets on Dependabot PRs. One deliberate widening: `kindorg-ci` also has
+Workflows: write, because GitHub refuses an App-created tag or Release whose
+commits change workflow files without it (this repo's 4.1.0 failed with
+"Resource not accessible by integration" until it was granted, 2026-10-03).
+The trade-off: whoever holds its key, the org secret `KINDORG_CI_APP_KEY`,
+can now change workflows in the repos the App is installed on.
 
 ## We automate all the right things
 
