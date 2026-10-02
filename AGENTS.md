@@ -103,7 +103,8 @@ Services follow the major tag `@v4`, so a change here reaches all of them at
 the next release of this repo. Each PR runs `self-test.yml` with the PR's own
 actions on `fixtures/`: `pull-request.yml` (job `ci`), `ship.yml` with a
 dry-run Release (job `ship`), `redeliver.yml` as a dry run of this repo's
-latest Release (job `redeliver`), the list form of the image actions, the Artifact list, the
+latest Release (job `redeliver`), `actions/deliver` directly (job
+`deliver`: delivered, refused at record, failing at find), the list form of the image actions, the Artifact list, the
 recording cases (`actions/record`: no-downgrade, Application annotations,
 the rendered manifests verified), a dry-run record of pepic in the real
 homelab-k8s (no diff, nothing pushed), and actionlint. Show new
@@ -112,10 +113,12 @@ behaviour there as a dry run when it would otherwise write somewhere.
 - **One job per Stage**, named `Build`, `Accept` or `Deliver`; details are
   its steps, named in words. No matrix, no further nesting: a service's
   check names are `ci / <Stage>`, and its ruleset requires them.
-- **Change ship.yml and redeliver.yml together.** Their Deliver jobs are
-  kept step for step the same from promote to report (one file each: a
-  shared reusable workflow would nest the names a level deeper); self-test
-  fails when they drift.
+- **Delivery lives in the deliver module** (`actions/deliver`). Ship's and
+  re-delivery's Deliver jobs only get the Release (cut it / the latest),
+  call the module and write the summary; change Delivery there, once (a
+  shared reusable workflow would nest the names a level deeper, a composite
+  does not). Self-test calls it directly (job `deliver`) besides the two
+  workflows' dry runs.
 - **Breaking** (`!`): a change to an input of `pull-request.yml`,
   `ship.yml` or `redeliver.yml`, or to a job name (it is a required check
   name). Those three workflows are the public interface; `actions/` are

@@ -1,0 +1,202 @@
+name: Deliver
+description: >
+  Delivery of one Release, whole: its Artifact promoted to the version (same
+  digest), checked to be the Artifact it was given or found, re-scanned,
+  recorded in homelab-k8s (gitops-pr: record.sh and the GitOps PR), reported
+  on the PRs of the Release. Ship and re-deliver both call it and differ only
+  in how they get the Release (cut it / the latest) and the Artifact (the one
+  Build made and Accept scanned / found in ghcr for the release commit).
+  Stops at the first part that fails and says which (`failed-at`) and how it
+  ended (`outcome`), for delivery-summary. Its parts are the actions of the
+  kindorg-hq/ci checkout at .kindorg-ci in the workspace (the workflows
+  check it out there); their notes go to the file KINDORG_CI_NOTES names. A
+  dry run tags nothing real (a throw-away tag), records in a git copy of
+  fixtures/gitops instead of homelab-k8s (app hello-dry-run) and writes
+  nothing on PRs.
+inputs:
+  version:
+    description: The Release's version, X.Y.Z (in a dry run, the would-be one)
+    required: true
+  tag:
+    description: Its tag, vX.Y.Z
+    required: true
+  sha:
+    description: The release commit, full SHA
+    required: true
+  release-url:
+    description: The GitHub Release (empty in a dry run of Ship)
+    default: ""
+  ref:
+    description: >
+      The commit whose Release PRs the report looks at; empty: the tag. A
+      would-be Release has no tag yet: its commit.
+    default: ""
+  artifact:
+    description: >
+      The Artifact list to deliver, [{"name", "image", "digest"}] — on Ship,
+      the one Build pushed and Accept scanned. Empty: found in ghcr for `sha`
+      (re-delivery: nothing is built), from `images`.
+    default: ""
+  images:
+    description: >
+      The service's images, [{"name", ...}] as ship.yml takes them; only
+      read to find the Artifact when `artifact` is empty
+    default: ""
+  app:
+    description: Application directory under homelab-k8s/manifests/
+    required: true
+  environment-url:
+    description: Where the service answers, on the Application and the deployment
+    default: ""
+  trivy-severity:
+    default: CRITICAL
+  dry-run:
+    description: '"true": a throw-away tag, the fixture GitOps tree, the report as a dry run (self-test)'
+    default: "false"
+  app-id:
+    description: The kindorg-ci App's id, for the GitOps PR; not needed in a dry run
+    default: ""
+  private-key:
+    description: The kindorg-ci App's private key; not needed in a dry run
+    default: ""
+  token:
+    description: GITHUB_TOKEN with packages:write, pull-requests:write and deployments:write (read is enough for PRs and deployments in a dry run)
+    required: true
+outputs:
+  outcome:
+    description: >
+      recorded (the GitOps PR merged), already-recorded (homelab-k8s had this
+      Release: nothing changed there), dry-run, or failed
+    value: ${{ steps.result.outputs.outcome }}
+  failed-at:
+    description: The part that failed, in words ("promote", "record in homelab-k8s", …); empty when none did
+    value: ${{ steps.result.outputs.failed-at }}
+  images:
+    description: The Artifact list delivered — promoted when promote ran, else as given or found
+    value: ${{ steps.result.outputs.images }}
+  gitops-pr:
+    description: The GitOps PR merged; empty when nothing new was recorded and in a dry run
+    value: ${{ steps.gitops.outputs.pr-url }}
+  diff:
+    description: What the recording changed in the GitOps tree (git diff); empty when nothing
+    value: ${{ steps.gitops.outputs.diff }}
+runs:
+  using: composite
+  steps:
+    # nothing built in this run (re-delivery): the Artifact list Build made
+    # for the release commit on merge, found under :<release-commit-sha>
+    - id: find
+      if: inputs.artifact == ''
+      uses: ./.kindorg-ci/actions/find-artifact
+      with:
+        images: ${{ inputs.images }}
+        sha: ${{ inputs.sha }}
+        token: ${{ inputs.token }}
+
+    # build once, promote: the version tag on the very digest
+    - id: promote
+      uses: ./.kindorg-ci/actions/promote-image
+      with:
+        images: ${{ inputs.artifact || steps.find.outputs.images }}
+        to-tag: ${{ inputs.dry-run == 'true' && format('0.0.0-dry-run-{0}', github.event.pull_request.number || github.run_id) || inputs.version }}
+        token: ${{ inputs.token }}
+
+    # what is delivered is what was accepted, byte for byte: two Artifact
+    # lists, compared as they are
+    - id: same
+      shell: bash
+      env:
+        GIVEN: ${{ inputs.artifact || steps.find.outputs.images }}
+        PROMOTED: ${{ steps.promote.outputs.images }}
+      run: |
+        [ "$GIVEN" = "$PROMOTED" ] || {
+          echo "::error::promoted images differ from the Artifact delivered: $GIVEN → $PROMOTED"; exit 1; }
+        echo "$PROMOTED"
+
+    - id: rescan
+      uses: ./.kindorg-ci/actions/scan-image
+      with:
+        images: ${{ steps.promote.outputs.images }}
+        severity: ${{ inputs.trivy-severity }}
+        token: ${{ inputs.token }}
+
+    # A dry run records for real, but in a git copy of fixtures/gitops (this
+    # checkout's), never in homelab-k8s: the diff shows in the notes.
+    # self-test's record-dry-run job covers homelab-k8s itself.
+    - id: fixture
+      if: inputs.dry-run == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="$RUNNER_TEMP/fixtures-gitops"
+        rm -rf "$dir"
+        cp -R "$GITHUB_ACTION_PATH/../../fixtures/gitops" "$dir"
+        git -C "$dir" init -q
+        git -C "$dir" add -A
+        git -C "$dir" -c user.name=kindorg-ci -c user.email=kindorg-ci@users.noreply.github.com commit -qm "fixtures/gitops"
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+    # an already recorded version (a re-delivery): no PR, no pr-url
+    - id: gitops
+      uses: ./.kindorg-ci/actions/gitops-pr
+      with:
+        dry-run: ${{ inputs.dry-run }}
+        checkout: ${{ steps.fixture.outputs.dir }}
+        app: ${{ inputs.app }}
+        version: ${{ inputs.version }}
+        images: ${{ steps.promote.outputs.images }}
+        release-url: ${{ inputs.release-url }}
+        source-sha: ${{ inputs.sha }}
+        environment-url: ${{ inputs.environment-url }}
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+
+    # Also when nothing new was recorded: a delivery that died after the
+    # GitOps PR gets its labels, comments and deployment here. With no
+    # pr-url it leaves existing comments and the deployment as they are, so
+    # "running" stays running.
+    - id: report
+      uses: ./.kindorg-ci/actions/report-delivery
+      with:
+        dry-run: ${{ inputs.dry-run }}
+        version: ${{ inputs.version }}
+        ref: ${{ inputs.ref || inputs.tag }}
+        release-url: ${{ inputs.release-url }}
+        gitops-pr: ${{ steps.gitops.outputs.pr-url }}
+        environment-url: ${{ inputs.environment-url }}
+        token: ${{ inputs.token }}
+
+    # where it stopped and how it ended, also when a part failed
+    - id: result
+      if: always()
+      shell: bash
+      env:
+        FIND: ${{ steps.find.outcome }}
+        PROMOTE: ${{ steps.promote.outcome }}
+        SAME: ${{ steps.same.outcome }}
+        RESCAN: ${{ steps.rescan.outcome }}
+        FIXTURE: ${{ steps.fixture.outcome }}
+        GITOPS: ${{ steps.gitops.outcome }}
+        REPORT: ${{ steps.report.outcome }}
+        GIVEN: ${{ inputs.artifact }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        PR_URL: ${{ steps.gitops.outputs.pr-url }}
+        IMAGES: ${{ steps.promote.outputs.images || inputs.artifact || steps.find.outputs.images }}
+      run: |
+        set -euo pipefail
+        record="record in homelab-k8s"; [ "$DRY_RUN" != true ] || record="record in the fixture GitOps tree"
+        accepted="the accepted ones"; [ -n "$GIVEN" ] || accepted="the release commit's Artifact"
+        at=
+        for part in "FIND:find the release commit's Artifact" "PROMOTE:promote" \
+            "SAME:the promoted images are $accepted" "RESCAN:re-scan" "FIXTURE:$record" \
+            "GITOPS:$record" "REPORT:report on the PRs"; do
+          var=${part%%:*}; outcome=${!var}
+          if [ "$outcome" = failure ] || [ "$outcome" = cancelled ]; then at=${part#*:}; break; fi
+        done
+        if [ -n "$at" ]; then outcome=failed
+        elif [ "$DRY_RUN" = true ]; then outcome=dry-run
+        elif [ -n "$PR_URL" ]; then outcome=recorded
+        else outcome=already-recorded; fi
+        eof="EOF_$(openssl rand -hex 8)"
+        { echo "outcome=$outcome"; echo "failed-at=$at"; echo "images<<$eof"; echo "$IMAGES"; echo "$eof"; } >> "$GITHUB_OUTPUT"
+        echo "Deliver: $outcome${at:+ at $at}"

@@ -5,14 +5,17 @@ description: >
   The other actions write their notes to the file KINDORG_CI_NOTES names
   instead of their own step summaries; this folds them in below, collapsed,
   so nothing is said twice. Runs last, also when a step before it failed: the
-  title then names that step.
+  title then names that step, or the part of actions/deliver that failed
+  (its `failed-at`).
 inputs:
   kind:
     description: '"Ship" or "Re-deliver" — the first word of the title'
     required: true
-  deliver:
-    description: '"true" when there was a Release to deliver (a Releasable change, or the latest Release)'
-    default: "false"
+  outcome:
+    description: >
+      actions/deliver's `outcome` — recorded, already-recorded, dry-run or
+      failed; empty when there was no Release to deliver (no Releasable change)
+    default: ""
   dry-run:
     description: '"true": nothing was tagged or recorded'
     default: "false"
@@ -34,7 +37,7 @@ inputs:
     description: Markdown notes of the jobs before (e.g. Build's), shown with the steps' own
     default: ""
   failed:
-    description: The step that failed, in words; empty when none did
+    description: The step that failed, in words (or actions/deliver's `failed-at`); empty when none did
     default: ""
 runs:
   using: composite
@@ -42,7 +45,7 @@ runs:
     - shell: bash
       env:
         KIND: ${{ inputs.kind }}
-        DELIVER: ${{ inputs.deliver }}
+        OUTCOME: ${{ inputs.outcome }}
         DRY_RUN: ${{ inputs.dry-run }}
         VERSION: ${{ inputs.version }}
         RELEASE_URL: ${{ inputs.release-url }}
@@ -64,16 +67,16 @@ runs:
         if [ -n "$FAILED" ]; then
           s "## $KIND ${tag:-$sha7}: failed at $FAILED"
           s "Stopped at **$FAILED**; its log names the cause, and nothing after it ran."
-          if [ "$DELIVER" = true ] && [ "$DRY_RUN" != true ] && [ -n "$RELEASE_URL" ]; then
+          if [ "$DRY_RUN" != true ] && [ -n "$RELEASE_URL" ]; then
             s "The Release $release exists: once the cause is fixed, re-deliver it (AGENTS.md, When a delivery goes wrong). It is promoted again, never rebuilt."
           fi
-        elif [ "$DELIVER" != true ]; then
+        elif [ -z "$OUTCOME" ]; then
           s "## $KIND $sha7: nothing to release"
           s "No Releasable change (feat, fix, perf or breaking) since the last Release: this commit is built and accepted, and ships with the next Release."
-        elif [ "$DRY_RUN" = true ]; then
+        elif [ "$OUTCOME" = dry-run ]; then
           s "## $KIND $tag (dry run)"
-          s "Would deliver $tag on \`$sha7\`: promoted to a throw-away tag and re-scanned; nothing tagged, nothing recorded in homelab-k8s, no PR touched."
-        elif [ -n "$GITOPS_PR" ]; then
+          s "Would deliver $tag on \`$sha7\`: promoted to a throw-away tag, re-scanned, and recorded in a copy of the fixture GitOps tree (the diff is in the notes); nothing tagged, homelab-k8s untouched, no PR touched."
+        elif [ "$OUTCOME" = recorded ]; then
           s "## $KIND $tag"
           s "**$tag recorded** in homelab-k8s. Next, without anyone: ArgoCD syncs it and turns the comment on the release commit's PR into \"running\" (or \"degraded\"); the \`production\` deployment of \`$sha7\` is the source of truth."
         else

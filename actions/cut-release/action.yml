@@ -12,8 +12,13 @@ inputs:
   dry-run:
     description: '"true": compute the version and notes, tag nothing'
     default: "false"
-  token:
-    description: Token with contents:write on the repo (the kindorg-ci App); not needed in dry-run
+  app-id:
+    description: >
+      The kindorg-ci App's id: its token tags and creates the Release (one by
+      GITHUB_TOKEN would trigger no workflows). Not needed in dry-run.
+    default: ""
+  private-key:
+    description: The kindorg-ci App's private key; not needed in dry-run
     default: ""
   path:
     description: Checkout of the repo with its full history and tags (fetch-depth 0)
@@ -34,12 +39,20 @@ outputs:
 runs:
   using: composite
   steps:
+    # a token for this repo, contents:write as the App has it
+    - id: token
+      if: inputs.dry-run != 'true'
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+
     - id: cut
       shell: bash
       working-directory: ${{ inputs.path }}
       env:
         DRY_RUN: ${{ inputs.dry-run }}
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ steps.token.outputs.token }}
         CONFIG: ${{ github.action_path }}/cliff.toml
         GIT_CLIFF: orhunp/git-cliff:2.14.2@sha256:1e696a381a1b0366bb6ccbb6bd4e50e73473fda88eab3a757b95e0d0d66c9531
         JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486

@@ -1,0 +1,16 @@
+# hello-dry-run's ArgoCD Application: Deliver's dry runs write the
+# kindorg.dev annotations here (on a copy).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-dry-run
+  namespace: argocd
+spec:
+  project: apps
+  source:
+    repoURL: https://github.com/kindorg-hq/homelab-k8s.git
+    targetRevision: main
+    path: manifests/hello-dry-run/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: public

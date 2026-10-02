@@ -23,29 +23,30 @@
 # and `gh workflow run redeliver.yml` starts it. The graph is one box,
 # `ci / Deliver`; the summary is headed "Re-deliver vX.Y.Z". The run-name is
 # the caller's and static: the version is known only once the run has found
-# the Release (and a reusable workflow's own run-name is ignored).
+# the Release (and a reusable workflow's own run-name is ignored). Three steps:
 #   Find the latest Release   its tag, URL and commit (gh release view)
-#   Find its Artifact         ghcr.io/<owner>/<name>:<release-commit-sha> per
-#                             image, as the Artifact list Build made for it
-#                             (actions/find-artifact); none for that commit
-#                             fails here
-#   Promote                   that list → :X.Y.Z, same digest
-#   then as in Ship: re-scan, record in homelab-k8s (GitOps PR: no downgrade,
-#   pinned by digest, the Release on the Application, verified to run every
-#   image@digest, an open PR of an earlier attempt reused, checks waited for,
-#   merged), report on the PRs.
+#   Deliver the Release       actions/deliver, as Ship runs it: the Artifact
+#                             of the release commit found in ghcr
+#                             (ghcr.io/<owner>/<name>:<release-commit-sha>
+#                             per image; none for that commit fails here),
+#                             promoted → :X.Y.Z, same digest, re-scanned,
+#                             recorded in homelab-k8s (GitOps PR: no
+#                             downgrade, pinned by digest, the Release on the
+#                             Application, verified to run every
+#                             image@digest, an open PR of an earlier attempt
+#                             reused, checks waited for, merged), reported on
+#                             the PRs
+#   Summary                   naming the part that failed, if one did
 # A version already recorded changes nothing in homelab-k8s ("Manifests already
 # at …", no PR); the report then labels and comments only where that is
 # missing, and leaves existing comments and the `production` deployment as
 # they are, so a Release already running stays running.
 #
-# Ship's Deliver job and this one are kept step for step the same from promote
-# to report (self-test compares them); they differ in how they get the Release
-# (cut it / find the latest), in where the Artifact list comes from (Build /
-# found in ghcr for the release commit) and in the check after promote (the
-# list Accept scanned / the list found). One concurrency group with Ship: a
-# re-delivery waits for a Ship's Deliver of the same service, and the other way
-# round.
+# Ship's Deliver job and this one differ only in how they get the Release (cut
+# it / find the latest) and where the Artifact list comes from (Build / found
+# in ghcr for the release commit); Delivery itself is one module. One
+# concurrency group with Ship: a re-delivery waits for a Ship's Deliver of the
+# same service, and the other way round.
 #
 # Runs as the kindorg-ci GitHub App for the GitOps PR: vars.KINDORG_CI_APP_ID
 # (org variable) and secrets.KINDORG_CI_APP_KEY.
@@ -75,8 +76,9 @@ on:
         default: v4
       dry-run:
         description: >
-          Self-test: promote to a throw-away tag, report as a dry run; no
-          GitOps PR, nothing written on PRs
+          Self-test: promote to a throw-away tag, record in a copy of
+          fixtures/gitops (app hello-dry-run), report as a dry run;
+          homelab-k8s untouched, nothing written on PRs
         type: boolean
         default: false
     secrets:
@@ -104,8 +106,6 @@ jobs:
       deployments: write
     env:
       KINDORG_CI_NOTES: /tmp/kindorg-ci-notes.md
-      # what a dry run promotes to instead of the version
-      DRY_RUN_TAG: 0.0.0-dry-run-${{ github.event.pull_request.number || github.run_id }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -116,9 +116,7 @@ jobs:
           ref: ${{ inputs.ci-ref }}
           path: .kindorg-ci
           persist-credentials: false
-      # The Release the steps below deliver, as ship.yml's "The Release to
-      # deliver" gives it: deliver, version, tag, url, sha (the release
-      # commit), ref (what the report looks at).
+      # Get the Release: the latest one, its tag, URL and release commit
       - id: release
         name: Find the latest Release
         env:
@@ -130,82 +128,26 @@ jobs:
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the latest Release's tag is not vX.Y.Z: $tag"; exit 1; }
           url=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
           sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)
-          { echo "deliver=true"; echo "version=${tag#v}"; echo "tag=$tag"; echo "url=$url"
-            echo "sha=$sha"; echo "ref=$tag"; } >> "$GITHUB_OUTPUT"
+          { echo "version=${tag#v}"; echo "tag=$tag"; echo "url=$url"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
           echo "Re-delivering the latest Release, [$tag]($url), commit \`$sha\`: its Artifact is promoted again, nothing is rebuilt." | tee -a "$KINDORG_CI_NOTES"
-      # nothing is built in this run: the Artifact list is the one Build made
-      # for the release commit on merge, found under :<release-commit-sha>
-      - id: artifact
-        name: Find the release commit's Artifact
-        if: steps.release.outputs.deliver == 'true'
-        uses: ./.kindorg-ci/actions/find-artifact
+      # Delivery, all of it (actions/deliver, as Ship runs it). Nothing is
+      # built in this run: no `artifact`, so it finds the one Build made for
+      # the release commit on merge (:<release-commit-sha>) and promotes that.
+      - id: deliver
+        name: Deliver the Release (promote, re-scan, record in homelab-k8s, report)
+        uses: ./.kindorg-ci/actions/deliver
         with:
-          images: ${{ inputs.images }}
-          sha: ${{ steps.release.outputs.sha }}
-          token: ${{ github.token }}
-
-      # From here to the summary, ship.yml and redeliver.yml run the same
-      # steps (self-test compares them), but for what is promoted and the
-      # check after promote. Promoted: the Artifact list found above.
-      - id: promote
-        name: Promote :<commit-sha> to the version, same digest
-        if: steps.release.outputs.deliver == 'true'
-        uses: ./.kindorg-ci/actions/promote-image
-        with:
-          images: ${{ steps.artifact.outputs.images }}
-          to-tag: ${{ inputs.dry-run && env.DRY_RUN_TAG || steps.release.outputs.version }}
-          token: ${{ github.token }}
-      # what is delivered is the Artifact built (and accepted) for the release
-      # commit on merge, byte for byte
-      - id: same
-        name: The promoted images are the release commit's Artifact
-        if: steps.promote.outcome == 'success'
-        env:
-          FOUND: ${{ steps.artifact.outputs.images }}
-          PROMOTED: ${{ steps.promote.outputs.images }}
-        run: |
-          # two Artifact lists, compared as they are
-          [ "$FOUND" = "$PROMOTED" ] || {
-            echo "::error::promoted images differ from the release commit's Artifact: $FOUND → $PROMOTED"; exit 1; }
-          echo "$PROMOTED"
-      - id: rescan
-        name: Re-scan the promoted images
-        if: steps.same.outcome == 'success'
-        uses: ./.kindorg-ci/actions/scan-image
-        with:
-          images: ${{ steps.promote.outputs.images }}
-          severity: ${{ inputs.trivy-severity }}
-          token: ${{ github.token }}
-      # an already recorded version (a re-delivery): "Manifests already at",
-      # no PR, no pr-url
-      - id: gitops
-        name: Record in homelab-k8s (GitOps PR)
-        if: ${{ steps.rescan.outcome == 'success' && !inputs.dry-run }}
-        uses: ./.kindorg-ci/actions/gitops-pr
-        with:
-          app: ${{ inputs.app }}
           version: ${{ steps.release.outputs.version }}
-          images: ${{ steps.promote.outputs.images }}
+          tag: ${{ steps.release.outputs.tag }}
+          sha: ${{ steps.release.outputs.sha }}
           release-url: ${{ steps.release.outputs.url }}
-          source-sha: ${{ steps.release.outputs.sha }}
+          images: ${{ inputs.images }}
+          app: ${{ inputs.app }}
           environment-url: ${{ inputs.url }}
+          trivy-severity: ${{ inputs.trivy-severity }}
+          dry-run: ${{ inputs.dry-run }}
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
-      # Also when nothing new was recorded: a delivery that died after the
-      # GitOps PR gets its labels, comments and deployment here. With no
-      # pr-url it leaves existing comments and the deployment as they are, so
-      # "running" stays running.
-      - id: report
-        name: Report on the PRs in the Release
-        if: steps.gitops.outcome == 'success' || (inputs.dry-run && steps.rescan.outcome == 'success')
-        uses: ./.kindorg-ci/actions/report-delivery
-        with:
-          dry-run: ${{ inputs.dry-run }}
-          version: ${{ steps.release.outputs.version }}
-          ref: ${{ steps.release.outputs.ref }}
-          release-url: ${{ steps.release.outputs.url }}
-          gitops-pr: ${{ steps.gitops.outputs.pr-url }}
-          environment-url: ${{ inputs.url }}
           token: ${{ github.token }}
 
       - name: Summary
@@ -213,20 +155,15 @@ jobs:
         uses: ./.kindorg-ci/actions/delivery-summary
         with:
           kind: Re-deliver
-          deliver: ${{ steps.release.outputs.deliver == 'true' }}
+          outcome: ${{ steps.deliver.outputs.outcome }}
           dry-run: ${{ inputs.dry-run }}
           version: ${{ steps.release.outputs.version }}
           release-url: ${{ steps.release.outputs.url }}
           sha: ${{ steps.release.outputs.sha || github.sha }}
-          images: ${{ steps.promote.outputs.images || steps.artifact.outputs.images }}
-          gitops-pr: ${{ steps.gitops.outputs.pr-url }}
+          images: ${{ steps.deliver.outputs.images }}
+          gitops-pr: ${{ steps.deliver.outputs.gitops-pr }}
           failed: >-
             ${{ steps.release.outcome == 'failure' && 'find the latest Release' ||
-            steps.artifact.outcome == 'failure' && 'find the release commit''s Artifact' ||
-            steps.promote.outcome == 'failure' && 'promote' ||
-            steps.same.outcome == 'failure' && 'the promoted images are the release commit''s Artifact' ||
-            steps.rescan.outcome == 'failure' && 're-scan' ||
-            steps.gitops.outcome == 'failure' && 'record in homelab-k8s' ||
-            steps.report.outcome == 'failure' && 'report on the PRs' ||
+            steps.deliver.outputs.failed-at ||
             job.status == 'cancelled' && 'a cancel' ||
             job.status == 'failure' && 'set-up' || '' }}

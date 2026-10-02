@@ -1,0 +1,19 @@
+# One container per fixture image a dry-run delivery pins.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-dry-run
+spec:
+  selector:
+    matchLabels:
+      app: hello-dry-run
+  template:
+    metadata:
+      labels:
+        app: hello-dry-run
+    spec:
+      containers:
+      - name: ship
+        image: ghcr.io/kindorg-hq/hello-ship
+      - name: redeliver
+        image: ghcr.io/kindorg-hq/hello-redeliver
