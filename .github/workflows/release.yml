@@ -1,9 +1,9 @@
 # Releases of this repo with release-please (called by release.self.yml): on
 # every push to main it keeps a "release x.y.z" PR up to date with the
 # changelog; merging that PR tags the release and creates the GitHub Release.
-# A human merges the release PR. Services no longer use it: in v3 they cut
-# their Releases on merge (golden-path.yml); frozen @v2 callers read the v2
-# tag's own copy.
+# A human merges the release PR. Services no longer use it: since v3 they cut
+# their Releases on merge (v4: ship.yml); frozen @v2 callers read the v2 tag's
+# own copy.
 #
 # It runs as the kindorg-ci GitHub App, not GITHUB_TOKEN: a PR opened with
 # GITHUB_TOKEN would not trigger the checks on the release PR.

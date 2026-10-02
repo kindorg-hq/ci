@@ -3,20 +3,15 @@ description: >
   Trivy over a list of built images, one after the other in one step:
   operating-system packages and application dependencies. `images` is a JSON
   list of {"name", "ref"} — the `images` output of build-image or
-  promote-image as is; v3 callers pass one image as `ref` instead. Every image
-  is scanned; the step fails afterwards, naming each image that failed. Fails
+  promote-image as is. Every image is scanned; the step fails afterwards, naming each image that failed. Fails
   on CRITICAL by default — HIGH on old base images would drown the signal.
   Runs Trivy as a pinned container, not a third-party action.
 inputs:
   images:
     description: >
       JSON list of images to scan, each {"name", "ref"} (ref: local tag or
-      name@digest; name labels the result, the ref when left out). Takes
-      precedence over `ref`.
-    default: ""
-  ref:
-    description: One image reference to scan (local tag or name@digest) — the v3 form; use `images` for a list
-    default: ""
+      name@digest; name labels the result, the ref when left out).
+    required: true
   severity:
     description: Severities that fail the check
     default: CRITICAL
@@ -34,7 +29,6 @@ runs:
     - shell: bash
       env:
         IMAGES: ${{ inputs.images }}
-        REF: ${{ inputs.ref }}
         SEVERITY: ${{ inputs.severity }}
         TOKEN: ${{ inputs.token }}
         PLATFORM: ${{ inputs.platform }}
@@ -44,17 +38,11 @@ runs:
         set -euo pipefail
         jq() { docker run --rm -i "$JQ" "$@"; }
 
-        # the list: `images`, or the v3 single ref as a list of one
-        if [ -z "$IMAGES" ]; then
-          [ -n "$REF" ] || { echo "::error::scan-image: give \`images\` (a JSON list) or \`ref\`"; exit 1; }
-          list=$(printf '%s\t%s' "$REF" "$REF")
-        else
-          list=$(echo "$IMAGES" | jq -r '
-            if type == "array" and length > 0 and all(.[]; type == "object" and (.ref | type) == "string" and .ref != "")
-            then .[] | [(.name // .ref), .ref] | @tsv
-            else error("bad images") end') || {
-            echo "::error::scan-image: images must be a non-empty JSON list of {\"name\", \"ref\"}, got: ${IMAGES}"; exit 1; }
-        fi
+        list=$(echo "$IMAGES" | jq -r '
+          if type == "array" and length > 0 and all(.[]; type == "object" and (.ref | type) == "string" and .ref != "")
+          then .[] | [(.name // .ref), .ref] | @tsv
+          else error("bad images") end') || {
+          echo "::error::scan-image: images must be a non-empty JSON list of {\"name\", \"ref\"}, got: ${IMAGES}"; exit 1; }
 
         auth=()
         if [ -n "$TOKEN" ]; then

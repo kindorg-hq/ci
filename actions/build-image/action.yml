@@ -2,8 +2,7 @@ name: Build image
 description: >
   Build a list of container images with buildx, one after the other in one
   step: `images` is a JSON list of {"name", "context", "dockerfile"} (context
-  "." and dockerfile "Dockerfile" when left out). v3 callers pass one image as
-  `name`/`context`/`dockerfile` instead; that is a list of one. When an image's
+  "." and dockerfile "Dockerfile" when left out). When an image's
   Dockerfile has a `test` stage, that stage is built first: the service's
   tests run in the image's own environment, and a failure stops the Build. On
   a pull request it then only proves the Dockerfile builds (loaded locally as
@@ -15,26 +14,14 @@ inputs:
     description: >
       JSON list of images to build, each {"name", "context", "dockerfile"}
       (e.g. [{"name": "pepic"}, {"name": "pepic-worker", "dockerfile":
-      "worker/Dockerfile"}]). Takes precedence over name/context/dockerfile.
-    default: ""
-  name:
-    description: One image's name under ghcr.io/<owner>/ (e.g. pepic) — the v3 form; use `images` for a list
-    default: ""
-  context:
-    description: Build context of the `name` image
-    default: "."
-  dockerfile:
-    description: Path to the Dockerfile of the `name` image
-    default: Dockerfile
+      "worker/Dockerfile"}]).
+    required: true
   platform:
     description: Target platform (the cluster is arm64)
     default: linux/arm64
   push:
     description: "true: push to ghcr; false: load into the local docker"
     default: "false"
-  version:
-    description: Version to tag as well when pushing; the golden path leaves it empty (a Release promotes, deliver.yml)
-    default: ""
   token:
     description: Token with packages:write (only when pushing)
     default: ""
@@ -45,12 +32,6 @@ outputs:
       the local tag, or ghcr.io/<owner>/<name>@<digest> when pushed; digest is
       empty unless pushed. scan-image takes it as its `images`.
     value: ${{ steps.build.outputs.images }}
-  ref:
-    description: The first image's reference (local tag, or name@digest when pushed) — the v3 single-image output
-    value: ${{ steps.build.outputs.ref }}
-  digest:
-    description: The first image's digest (only when pushed) — the v3 single-image output
-    value: ${{ steps.build.outputs.digest }}
 runs:
   using: composite
   steps:
@@ -77,12 +58,8 @@ runs:
       shell: bash
       env:
         IMAGES: ${{ inputs.images }}
-        NAME: ${{ inputs.name }}
-        CONTEXT: ${{ inputs.context }}
-        DOCKERFILE: ${{ inputs.dockerfile }}
         PLATFORM: ${{ inputs.platform }}
         PUSH: ${{ inputs.push }}
-        VERSION: ${{ inputs.version }}
         OWNER: ${{ github.repository_owner }}
         SOURCE: ${{ github.server_url }}/${{ github.repository }}
         JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
@@ -90,12 +67,6 @@ runs:
         set -euo pipefail
         jq() { docker run --rm -i "$JQ" "$@"; }
 
-        # the list: `images`, or the v3 single image as a list of one
-        if [ -z "$IMAGES" ]; then
-          [ -n "$NAME" ] || { echo "::error::build-image: give \`images\` (a JSON list) or \`name\`"; exit 1; }
-          IMAGES=$(jq -nc --arg n "$NAME" --arg c "$CONTEXT" --arg d "$DOCKERFILE" \
-            '[{name: $n, context: $c, dockerfile: $d}]')
-        fi
         list=$(echo "$IMAGES" | jq -r '
           if type == "array" and length > 0 and all(.[]; type == "object" and (.name | type) == "string")
           then .[] | [.name, (.context // "."), (.dockerfile // "Dockerfile")] | @tsv
@@ -129,7 +100,6 @@ runs:
 
           if [ "$PUSH" = "true" ]; then
             tags=(--tag "${image}:${GITHUB_SHA}")
-            [ -n "$VERSION" ] && tags+=(--tag "${image}:${VERSION}")
             output=(--push)
           else
             tags=(--tag "local/${name}:check")
@@ -140,7 +110,6 @@ runs:
             --platform "$PLATFORM" "${tags[@]}" "${output[@]}" \
             --label "org.opencontainers.image.source=${SOURCE}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --label "org.opencontainers.image.version=${VERSION}" \
             --cache-from "type=gha,scope=${name}" \
             --cache-to "type=gha,mode=max,scope=${name},ignore-error=true" \
             --metadata-file "${meta}/${name}.json" \
@@ -161,8 +130,4 @@ runs:
         rm -rf "$meta"
 
         images=$(printf '%s\n' "${out[@]}" | jq -Rnc '[inputs | split("\t") | {name: .[0], ref: .[1], digest: .[2]}]')
-        {
-          echo "images=${images}"
-          echo "ref=$(printf '%s' "${out[0]}" | cut -f2)"
-          echo "digest=$(printf '%s' "${out[0]}" | cut -f3)"
-        } >> "$GITHUB_OUTPUT"
+        echo "images=${images}" >> "$GITHUB_OUTPUT"

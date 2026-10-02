@@ -47,8 +47,9 @@ pass or fail, never "warning"; outputs (versions, evidence, changelogs) are
 transparent, immutable and published.
 
 Here: binary, yes: a scan finding fails the Stage; widening a threshold is the
-human's call. Published outputs: GitHub Release notes, the `released` label
-and recorded/running comment on each PR, the `production` deployment. Timing
+human's call. Published outputs: each run's one summary (version, digests,
+GitOps PR, or the step that failed), GitHub Release notes, the `released`
+label and recorded/running comment on each PR, the `production` deployment. Timing
 and failure-rate metrics beyond what GitHub Actions shows: not yet.
 
 ## We improve CI/CD incrementally and continually
@@ -57,8 +58,8 @@ Baby steps, skeleton first; pipelines are code, improved iteratively; pipeline
 changes may need more governance, because they change how risk is mitigated;
 ratchet the quality bar up.
 
-Here: versioned majors (v1, v2 frozen; v3 live; v4 in progress: runs read as
-Stages). Every PR here runs `self-test.yml`, and a human merges this repo's
+Here: versioned majors (v1, v2, v3 frozen; v4 live: a workflow per event,
+runs read as Stages). Every PR here runs `self-test.yml`, and a human merges this repo's
 release PR, since its version is a promise to every service.
 
 ## We fix forward
@@ -79,9 +80,12 @@ is what is released. Build and Accept run without dependencies, which makes
 them the PR build.
 
 Here: Build → Accept → Deliver, in order, each gating the next; Integrate and
-Rehearse stay in the model but have no environments here. The PR runs Build and
-Accept and publishes nothing. A merge runs all three; re-delivery runs Deliver
-only. Every job is named by its Stage.
+Rehearse stay in the model but have no environments here. One workflow per
+event: the pull request runs Build and Accept and publishes nothing, a merge
+runs all three, re-delivery runs Deliver only. One job per Stage, named by it
+(`ci / Build`, `ci / Accept`, `ci / Deliver`), its work as steps, no matrix;
+a run shows only the Stages it runs and one summary, so it reads the same on
+a phone.
 
 ## We deliver small changes
 

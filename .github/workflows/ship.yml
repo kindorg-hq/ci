@@ -36,8 +36,8 @@
 #            there ArgoCD reports running on the release commit's PR.
 # Deliveries of one service never overtake each other: Deliver, from cutting
 # the Release to recording it, runs one at a time per service repo (its
-# concurrency group, shared with v3's golden-path.yml and with re-delivery),
-# and the GitOps PR refuses a version lower than the recorded one.
+# concurrency group, shared with re-delivery), and the GitOps PR refuses a
+# version lower than the recorded one.
 #
 # Re-delivery (redeliver.yml) runs this Deliver job too, as its own file: the
 # same steps from promote to report (self-test compares them), with "find the
@@ -167,7 +167,9 @@ jobs:
     # so the group covers it whole. Not cancel-in-progress: a delivery half
     # done is worse than a late one. GitHub keeps one pending run per group
     # and drops older pending ones; the next Release includes their commits.
-    # The same group as v3's golden-path.yml and re-delivery: they queue here.
+    # The same group as re-delivery: they queue here. The name is v3's (its
+    # golden-path.yml used it), so a service's last v3 run and first v4 one
+    # queue too.
     concurrency:
       group: golden-path-deliver-${{ github.repository }}
       cancel-in-progress: false

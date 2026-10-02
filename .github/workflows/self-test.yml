@@ -2,7 +2,7 @@
 # a change here must pass before it can become the version every service uses.
 # On push to main it runs inside release.self.yml, so a release waits for it.
 name: self-test
-# as a service's PR run reads (pr.yml's caller); ignored when release.self.yml calls it
+# as a service's PR run reads (pull-request.yml's caller); ignored when release.self.yml calls it
 run-name: "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
 
 on:
@@ -14,16 +14,11 @@ permissions:
   pull-requests: read
 
 jobs:
-  pull-request:
-    uses: ./.github/workflows/pull-request.yml
-    with:
-      images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
-      ci-ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-  # v4: the pull request as a service calls it — job id `ci`, so the checks
-  # are `ci / Build` and `ci / Accept`, the two names a ruleset requires
+  # The pull request as a service calls it — job id `ci`, so the checks are
+  # `ci / Build` and `ci / Accept`, the two names a service's ruleset requires
+  # (this repo's requires them too)
   ci:
-    uses: ./.github/workflows/pr.yml
+    uses: ./.github/workflows/pull-request.yml
     with:
       images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
       ci-ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -42,10 +37,7 @@ jobs:
           persist-credentials: false
       - name: actionlint
         run: |
-          # actionlint 1.7.12 predates the self-repository syntax ($/) that
-          # golden-path.yml calls its stages with; GitHub accepts it
-          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color \
-            -ignore 'reusable workflow call "\$/'
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   no-downgrade:
     # The GitOps PR's guard (actions/gitops-pr/no-downgrade.sh), run against
@@ -82,29 +74,16 @@ jobs:
           persist-credentials: false
       - run: bash actions/gitops-pr/annotate-app.test.sh
 
-  golden-path:
-    # The entry a service calls, on a pull request: it must dispatch to the
-    # Checks, with its stages resolved from this commit ($/).
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    uses: ./.github/workflows/golden-path.yml
-    # what golden-path.yml's jobs declare, though only the Checks run here
-    permissions:
-      contents: read
-      packages: write
-      pull-requests: write
-      deployments: write
-    with:
-      app: hello
-      images: '[{"name": "hello", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}]'
-      ci-ref: ${{ github.event.pull_request.head.sha }}
-
   ship:
-    # v4 Ship as a service calls it, on the fixture: `ship / Build` →
-    # `ship / Accept` → `ship / Deliver`, the Release cut as a dry run on this
-    # repo's history, the image promoted to a throw-away tag (digest checked
-    # against Accept's), re-scanned, the report as a dry run; no GitOps PR.
-    # Its own image name, so the deliver-path job's hello:<sha> is not pushed
-    # under it.
+    # Ship as a service calls it, on the fixture: `ship / Build` (the `test`
+    # stage, the image pushed as :<sha>) → `ship / Accept` (Trivy over the
+    # pushed index — that scan broke the first real release: Trivy looked for
+    # linux/amd64 in an arm64 index) → `ship / Deliver`: the Release cut as a
+    # dry run on this repo's history (version and notes in the summary, no
+    # tag), the image promoted to a throw-away tag without rebuilding (digest
+    # checked against Accept's), re-scanned, the report on the PRs as a dry
+    # run; no GitOps PR. Its own image name, so no other job's image is
+    # pushed under it.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/ship.yml
     permissions:
@@ -154,7 +133,7 @@ jobs:
           rm -rf "$cfg"
 
   redeliver:
-    # v4 re-delivery as a service calls it, on the fixture: one box,
+    # Re-delivery as a service calls it, on the fixture: one box,
     # `redeliver / Deliver` — the latest Release of this repo found, its
     # commit's Artifact (above) promoted to a throw-away tag and re-scanned,
     # the report as a dry run on that Release's PRs; no GitOps PR.
@@ -205,58 +184,11 @@ jobs:
             echo "::error::ship.yml's and redeliver.yml's Deliver jobs drifted apart (above); change both"; exit 1; }
           echo "Deliver job and steps promote → report: the same in ship.yml and redeliver.yml"
 
-  deliver-path:
-    # The path a service's artifact takes after a merge: Build runs the
-    # fixture's test stage and pushes the image tagged with the commit, Accept
-    # scans the pushed index (that scan broke the first real release: Trivy
-    # looked for linux/amd64 in an arm64 index), Deliver cuts the Release — here
-    # a dry run on this repo's own history: version and notes in the summary, no
-    # tag — and promotes the image without rebuilding: the digest must not change.
-    name: "Build, Accept, Deliver: artifact path of the fixture"
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      version: ${{ steps.cut.outputs.version }}
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: build
-        uses: ./actions/build-image
-        with:
-          name: hello
-          context: fixtures/hello
-          dockerfile: fixtures/hello/Dockerfile
-          push: "true"
-          token: ${{ github.token }}
-      - uses: ./actions/scan-image
-        with:
-          ref: ${{ steps.build.outputs.ref }}
-          token: ${{ github.token }}
-      - id: cut
-        uses: ./actions/cut-release
-        with:
-          dry-run: "true"
-      - uses: ./actions/promote-image
-        with:
-          image: ghcr.io/${{ github.repository_owner }}/hello
-          from-tag: ${{ github.sha }}
-          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-promoted
-          token: ${{ github.token }}
-
   image-list:
-    # The list form the v4 workflows use — one job per Stage, images looped
+    # The list form the workflows use — one job per Stage, images looped
     # inside it, no matrix: two fixture images (hello-list, fixtures/hello with
-    # its `test` stage, and hello-worker without one; own names, so the
-    # deliver-path job's hello:<sha> is not pushed under them) built and
+    # its `test` stage, and hello-worker without one; own names, so no other
+    # job's image is pushed under them) built and
     # loaded, then scanned in one step; a list whose second image fails its
     # tests stops the build; then built, pushed, scanned, and promoted in one
     # step each, the digests unchanged, every action's `images` output fed to
@@ -286,13 +218,11 @@ jobs:
           images: ${{ env.IMAGES }}
       - env:
           OUT: ${{ steps.check.outputs.images }}
-          REF: ${{ steps.check.outputs.ref }}
         run: |
           set -euo pipefail
           echo "$OUT"
           want='[{"name":"hello-list","ref":"local/hello-list:check","digest":""},{"name":"hello-worker","ref":"local/hello-worker:check","digest":""}]'
           [ "$OUT" = "$want" ] || { echo "::error::images output: want $want"; exit 1; }
-          [ "$REF" = "local/hello-list:check" ] || { echo "::error::ref output is the first image's: $REF"; exit 1; }
           docker image inspect local/hello-list:check local/hello-worker:check > /dev/null
       - uses: ./actions/scan-image
         with:
@@ -331,7 +261,6 @@ jobs:
       - env:
           BUILT: ${{ steps.build.outputs.images }}
           PROMOTED: ${{ steps.promote.outputs.images }}
-          DIGEST: ${{ steps.promote.outputs.digest }}
         run: |
           set -euo pipefail
           jq() { docker run --rm -i "$JQ" "$@"; }
@@ -342,41 +271,9 @@ jobs:
           [ "$(echo "$built" | jq 'length')" = 2 ] || { echo "::error::want two built images"; exit 1; }
           [ "$(echo "$built" | jq 'all(.[]; .digest | startswith("sha256:"))')" = true ] || { echo "::error::a pushed image has no digest"; exit 1; }
           [ "$built" = "$promoted" ] || { echo "::error::promotion changed a digest: $built → $promoted"; exit 1; }
-          [ "$DIGEST" = "$(echo "$built" | jq -r '.[0].digest')" ] || { echo "::error::digest output is the first image's"; exit 1; }
           echo "two images promoted, digests unchanged: ok"
       # what Deliver re-scans: the promoted list as is
       - uses: ./actions/scan-image
         with:
           images: ${{ steps.promote.outputs.images }}
-          token: ${{ github.token }}
-
-  report-dry-run:
-    # Deliver's last job, as a dry run on this repo: the PRs the would-be
-    # Release of this PR would label and comment on, and the production
-    # deployment it would create — in the summary, nothing written. Same
-    # runner as in deliver.yml.
-    name: "Deliver: report on the PRs (dry run)"
-    needs: deliver-path
-    if: needs.deliver-path.outputs.version != ''
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-      deployments: read
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./actions/report-delivery
-        with:
-          dry-run: "true"
-          version: ${{ needs.deliver-path.outputs.version }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          release-url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.deliver-path.outputs.version }}
-          gitops-pr: https://github.com/kindorg-hq/homelab-k8s/pull/0
-          environment-url: https://hello.example
           token: ${{ github.token }}

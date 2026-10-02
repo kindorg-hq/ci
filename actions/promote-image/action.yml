@@ -2,8 +2,7 @@ name: Promote image
 description: >
   Give already built images a release tag — without rebuilding them, one
   after the other in one step. `images` is a JSON list of {"name"} (images
-  under ghcr.io/<owner>/, as build-image takes them); v3 callers pass one full
-  image name as `image` instead. For each, finds the image built for a commit
+  under ghcr.io/<owner>/, as build-image takes them). For each, finds the image built for a commit
   (tagged with the commit SHA on merge), adds the version tag to the very same
   manifest, and checks the digest did not change: what was scanned on merge
   is byte for byte what gets delivered. The first image that fails stops the
@@ -12,12 +11,8 @@ inputs:
   images:
     description: >
       JSON list of images to promote, each {"name"} under ghcr.io/<owner>/
-      (e.g. [{"name": "pepic"}, {"name": "pepic-worker"}]). Takes precedence
-      over `image`.
-    default: ""
-  image:
-    description: One full image name (e.g. ghcr.io/kindorg-hq/pepic) — the v3 form; use `images` for a list
-    default: ""
+      (e.g. [{"name": "pepic"}, {"name": "pepic-worker"}]).
+    required: true
   from-tag:
     description: Tag of the built artifact — the commit SHA
     required: true
@@ -34,9 +29,6 @@ outputs:
       image (ref is image@digest): scan-image takes it as its `images`,
       gitops-pr as its `images` ({"name", "digest"}).
     value: ${{ steps.promote.outputs.images }}
-  digest:
-    description: The first image's digest (unchanged by promotion) — the v3 single-image output
-    value: ${{ steps.promote.outputs.digest }}
 runs:
   using: composite
   steps:
@@ -44,7 +36,6 @@ runs:
       shell: bash
       env:
         IMAGES: ${{ inputs.images }}
-        IMAGE: ${{ inputs.image }}
         FROM: ${{ inputs.from-tag }}
         TO: ${{ inputs.to-tag }}
         TOKEN: ${{ inputs.token }}
@@ -57,17 +48,12 @@ runs:
         set -euo pipefail
         jq() { docker run --rm -i "$JQ" "$@"; }
 
-        # the list as "name<TAB>full image": `images`, or the v3 single image
-        if [ -z "$IMAGES" ]; then
-          [ -n "$IMAGE" ] || { echo "::error::promote-image: give \`images\` (a JSON list) or \`image\`"; exit 1; }
-          list=$(printf '%s\t%s' "${IMAGE##*/}" "$IMAGE")
-        else
-          list=$(echo "$IMAGES" | jq -r --arg owner "${OWNER,,}" '
-            if type == "array" and length > 0 and all(.[]; type == "object" and (.name | type) == "string")
-            then .[] | [.name, "ghcr.io/\($owner)/\(.name)"] | @tsv
-            else error("bad images") end') || {
-            echo "::error::promote-image: images must be a non-empty JSON list of {\"name\"}, got: ${IMAGES}"; exit 1; }
-        fi
+        # the list as "name<TAB>full image"
+        list=$(echo "$IMAGES" | jq -r --arg owner "${OWNER,,}" '
+          if type == "array" and length > 0 and all(.[]; type == "object" and (.name | type) == "string")
+          then .[] | [.name, "ghcr.io/\($owner)/\(.name)"] | @tsv
+          else error("bad images") end') || {
+          echo "::error::promote-image: images must be a non-empty JSON list of {\"name\"}, got: ${IMAGES}"; exit 1; }
 
         cfg=$(mktemp -d)
         trap 'rm -rf "$cfg"' EXIT
@@ -95,7 +81,4 @@ runs:
 
         images=$(printf '%s\n' "${out[@]}" | jq -Rnc \
           '[inputs | split("\t") | {name: .[0], image: .[1], ref: "\(.[1])@\(.[2])", digest: .[2]}]')
-        {
-          echo "images=${images}"
-          echo "digest=$(printf '%s' "${out[0]}" | cut -f3)"
-        } >> "$GITHUB_OUTPUT"
+        echo "images=${images}" >> "$GITHUB_OUTPUT"

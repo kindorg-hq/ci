@@ -87,8 +87,8 @@ jobs:
     name: Deliver
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # the same group as ship.yml's Deliver (and v3's golden-path.yml): one
-    # delivery per service at a time; see there
+    # the same group as ship.yml's Deliver: one delivery per service at a
+    # time; see there
     concurrency:
       group: golden-path-deliver-${{ github.repository }}
       cancel-in-progress: false
