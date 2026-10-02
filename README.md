@@ -160,7 +160,8 @@ jobs:
     secrets: inherit
 ```
 
-`run-name` sits in the caller: a called workflow's own is ignored. Optional
+The workflow is named `re-deliver`; `gh workflow run` takes its file:
+`gh workflow run redeliver.yml`. `run-name` sits in the caller: a called workflow's own is ignored. Optional
 inputs: `runner` (default `ubuntu-24.04-arm`; pull request and ship),
 `trivy-severity` (`CRITICAL`), `require-issue` (pull request; `true`: the PR
 title's scope must be `#N`), `ci-ref` (`v4`). Each entry of `images` may set
@@ -195,19 +196,40 @@ secrets, which the pull request does not need.
 
 ## Migrating from v3 → v4
 
-1. **Files**: replace `pipeline.yml` (the one `golden-path.yml@v3` call) with
-   the three files above. `app`, `images` and `url` stay as they were; the
-   job id becomes `ci`.
-2. **Permissions**: `pull-request.yml` needs only `contents: read,
+One PR in the service repo; everything below lands in it.
+
+1. **Files**: delete `pipeline.yml` (the one `golden-path.yml@v3` call) and
+   add the three files above. `app`, `images` and `url` stay as they were;
+   the job id becomes `ci`.
+2. **Push branch**: `ship.yml`'s `on.push.branches` is the repo's default
+   branch — `[master]` where that is `master`. Copied as `[main]`, merges
+   ship nothing.
+3. **Permissions**: `pull-request.yml` needs only `contents: read,
    pull-requests: read`; `ship.yml` and `redeliver.yml` keep v3's
    `contents: read, packages: write, pull-requests: write, deployments: write`
    and `secrets: inherit`.
-3. **Ruleset check names**: replace the `golden-path / pull-request / …` names
-   (one Build and one image scan per image, plus title, secrets,
-   dependencies) with `ci / Build` and `ci / Accept`. Switch it in the
-   migration PR, once its run shows the new names, or that PR cannot merge.
-4. **Re-deliver**: `gh workflow run redeliver.yml` (v3:
+4. **Ruleset**: the v3 checks (`golden-path / pull-request / …`: one Build
+   and one image scan per image, plus title, secrets, dependencies) never
+   report again, so a ruleset still requiring them blocks every PR,
+   the migration PR first. Once that PR's run shows `ci / Build` and
+   `ci / Accept`, switch the required checks to those two: `GET` the
+   ruleset, change only `required_status_checks`, `PUT` it back whole (a
+   `PUT` without the other fields drops them):
+
+   ```sh
+   gh api repos/OWNER/REPO/rulesets                       # find the id
+   gh api repos/OWNER/REPO/rulesets/ID > ruleset.json     # edit the checks
+   jq '{name, target, enforcement, conditions, rules, bypass_actors}' ruleset.json \
+     | gh api -X PUT repos/OWNER/REPO/rulesets/ID --input -
+   ```
+
+5. **The service's own docs**: its README and AGENTS point at v4 — links to
+   `ci/blob/v4/…` (not `ci/blob/v3`), the three workflow files (not
+   `pipeline.yml`), `gh workflow run redeliver.yml` to re-deliver (not
    `gh workflow run pipeline.yml`).
+6. **Re-deliver**: the workflow is named `re-deliver`, its file is
+   `redeliver.yml`; `gh workflow run` takes the file:
+   `gh workflow run redeliver.yml`.
 
 Nothing else moves: Releases, tags, the Artifacts in ghcr, homelab-k8s and
 the PR comments carry over, and v4's Deliver queues with v3's (same
