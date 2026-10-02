@@ -1,6 +1,8 @@
-# Releases of kindorg-hq/ci itself. release-please keeps a release PR with the
-# changelog; merging it tags vX.Y.Z — and only then is the moving major tag
-# (v2, …) advanced, so services on @v2 never get code that has not been released.
+# Releases of kindorg-hq/ci itself. On push to main self-test runs first, on
+# that very commit; only when it is green does release-please run. It keeps a
+# release PR with the changelog (a human merges it); merging it tags vX.Y.Z —
+# and only then is the moving major tag advanced, so services on @vN never get
+# code that is unreleased or untested.
 name: release (ci)
 
 on:
@@ -11,7 +13,16 @@ permissions:
   contents: read
 
 jobs:
+  self-test:
+    uses: ./.github/workflows/self-test.yml
+    # what self-test's jobs ask for; the one that pushes packages runs on PRs only
+    permissions:
+      contents: read
+      pull-requests: read
+      packages: write
+
   release:
+    needs: self-test
     uses: ./.github/workflows/release.yml
     secrets: inherit
 
@@ -39,6 +50,11 @@ jobs:
           VERSION: ${{ needs.release.outputs.version }}
         run: |
           major="v${VERSION%%.*}"
+          # v2 is frozen at 2.1.0: its successor is v3
+          if [ "$major" = v2 ]; then
+            echo "v2 is frozen at 2.1.0; v$VERSION is tagged, v2 is not moved" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           git tag -f "$major"
           git push -f origin "$major"
           echo "$major → v$VERSION" >> "$GITHUB_STEP_SUMMARY"

@@ -1,11 +1,11 @@
 # This repo tests itself with its own checks, against its own code — not v1:
-# a change here must pass before it can become the v1 every service uses.
+# a change here must pass before it can become the version every service uses.
+# On push to main it runs inside release.self.yml, so a release waits for it.
 name: self-test
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read

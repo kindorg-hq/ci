@@ -53,14 +53,13 @@ jobs:
   release:
     if: github.event_name == 'push'
     uses: kindorg-hq/ci/.github/workflows/release.yml@v2
-    with: {auto-merge: true}
     secrets: inherit
 
   deliver:
     needs: [build, release]
     if: needs.release.outputs.released == 'true'
     uses: kindorg-hq/ci/.github/workflows/deliver.yml@v2
-    permissions: {contents: read, packages: write, pull-requests: write, deployments: write}
+    permissions: {contents: read, packages: write}
     with:
       app: pepic
       version: ${{ needs.release.outputs.version }}
@@ -83,13 +82,8 @@ Plus, in the service repo:
 
 ## Rules
 
-- **A merge to main ships.** Main is always releasable. The merge builds the
-  Artifact; with `auto-merge: true` the release PR merges itself once green, and
-  the Release is delivered. The release PR is kept for the version and the
-  CHANGELOG, not as a gate.
-- **Delivery is visible on the PR.** Every PR in a Release gets the `delivered`
-  label and a comment (version, Release, GitOps PR); the release commit gets a
-  deployment to the `cluster` environment.
+- **Only Releases are delivered.** A merge to main runs the Checks and updates
+  the release PR; nothing reaches the cluster until that PR is merged.
 - **Fix forward.** No rollback in the pipeline. Break-glass is a manual revert
   in homelab-k8s, described in its README.
 - **Images are pinned by digest** in homelab-k8s and labelled
@@ -101,10 +95,16 @@ Plus, in the service repo:
 
 ## Versioning of this repo
 
-Released by release-please like a service. Merging the release PR tags vX.Y.Z
-and only then moves the major tag (`v2`), so `@v2` never points at unreleased code. `v1` is frozen: it rebuilt the image at release time. Every PR
-runs `self-test.yml`: the Checks against `fixtures/hello`, using the actions
+Released by release-please like a service; a human merges the release PR.
+On push to main `release.self.yml` first runs `self-test.yml` on that commit,
+and release-please runs only once it is green: a red self-test cuts no release
+and moves no tag. Merging the release PR tags vX.Y.Z and only then moves the
+major tag, so `@vN` never points at unreleased or untested code. Every PR runs
+`self-test.yml` too: the Checks against `fixtures/hello`, using the actions
 from the PR itself, plus actionlint.
+
+`v1` is frozen: it rebuilt the image at release time. `v2` is frozen at 2.1.0;
+v3 is next, and the major-tag job refuses to move `v2`.
 
 ## Free-plan limits
 
