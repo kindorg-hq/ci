@@ -135,6 +135,104 @@ jobs:
           to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-promoted
           token: ${{ github.token }}
 
+  image-list:
+    # The list form the v4 workflows use — one job per Stage, images looped
+    # inside it, no matrix: two fixture images (hello-list, fixtures/hello with
+    # its `test` stage, and hello-worker without one; own names, so the
+    # deliver-path job's hello:<sha> is not pushed under them) built and
+    # loaded, then scanned in one step; a list whose second image fails its
+    # tests stops the build; then built, pushed, scanned, and promoted in one
+    # step each, the digests unchanged, every action's `images` output fed to
+    # the next as is.
+    name: "Build, Accept, Deliver: a list of images in one job"
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGES: '[{"name": "hello-list", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}, {"name": "hello-worker", "context": "fixtures/hello-worker", "dockerfile": "fixtures/hello-worker/Dockerfile"}]'
+      JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # pull request: built and loaded locally, scanned from there
+      - id: check
+        uses: ./actions/build-image
+        with:
+          images: ${{ env.IMAGES }}
+      - env:
+          OUT: ${{ steps.check.outputs.images }}
+          REF: ${{ steps.check.outputs.ref }}
+        run: |
+          set -euo pipefail
+          echo "$OUT"
+          want='[{"name":"hello-list","ref":"local/hello-list:check","digest":""},{"name":"hello-worker","ref":"local/hello-worker:check","digest":""}]'
+          [ "$OUT" = "$want" ] || { echo "::error::images output: want $want"; exit 1; }
+          [ "$REF" = "local/hello-list:check" ] || { echo "::error::ref output is the first image's: $REF"; exit 1; }
+          docker image inspect local/hello-list:check local/hello-worker:check > /dev/null
+      - uses: ./actions/scan-image
+        with:
+          images: ${{ steps.check.outputs.images }}
+
+      # one image's tests fail: the step fails (the error names it)
+      - id: broken
+        continue-on-error: true
+        uses: ./actions/build-image
+        with:
+          images: '[{"name": "hello-list", "context": "fixtures/hello", "dockerfile": "fixtures/hello/Dockerfile"}, {"name": "broken", "context": "fixtures/broken", "dockerfile": "fixtures/broken/Dockerfile"}]'
+      - env:
+          OUTCOME: ${{ steps.broken.outcome }}
+        run: |
+          [ "$OUTCOME" = "failure" ] || { echo "::error::a list with a failing test stage must fail the build, got $OUTCOME"; exit 1; }
+          echo "a failing image fails the list: ok"
+
+      # merge: pushed, scanned, promoted — each one step for the whole list
+      - id: build
+        uses: ./actions/build-image
+        with:
+          images: ${{ env.IMAGES }}
+          push: "true"
+          token: ${{ github.token }}
+      - uses: ./actions/scan-image
+        with:
+          images: ${{ steps.build.outputs.images }}
+          token: ${{ github.token }}
+      - id: promote
+        uses: ./actions/promote-image
+        with:
+          images: ${{ steps.build.outputs.images }}
+          from-tag: ${{ github.sha }}
+          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-list
+          token: ${{ github.token }}
+      - env:
+          BUILT: ${{ steps.build.outputs.images }}
+          PROMOTED: ${{ steps.promote.outputs.images }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          set -euo pipefail
+          jq() { docker run --rm -i "$JQ" "$@"; }
+          echo "built:    $BUILT"
+          echo "promoted: $PROMOTED"
+          built=$(echo "$BUILT" | jq -c 'map({name, digest})')
+          promoted=$(echo "$PROMOTED" | jq -c 'map({name, digest})')
+          [ "$(echo "$built" | jq 'length')" = 2 ] || { echo "::error::want two built images"; exit 1; }
+          [ "$(echo "$built" | jq 'all(.[]; .digest | startswith("sha256:"))')" = true ] || { echo "::error::a pushed image has no digest"; exit 1; }
+          [ "$built" = "$promoted" ] || { echo "::error::promotion changed a digest: $built → $promoted"; exit 1; }
+          [ "$DIGEST" = "$(echo "$built" | jq -r '.[0].digest')" ] || { echo "::error::digest output is the first image's"; exit 1; }
+          echo "two images promoted, digests unchanged: ok"
+      # what Deliver re-scans: the promoted list as is
+      - uses: ./actions/scan-image
+        with:
+          images: ${{ steps.promote.outputs.images }}
+          token: ${{ github.token }}
+
   report-dry-run:
     # Deliver's last job, as a dry run on this repo: the PRs the would-be
     # Release of this PR would label and comment on, and the production
