@@ -1,11 +1,11 @@
 # Changing a kindorg-hq repository
 
-Shared conventions for every repo on the golden path (v3). Terms (Stage,
+Shared conventions for every repo of kindorg-hq that ships through ci (v4). Terms (Stage,
 Artifact, Release, Releasable change, Delivery, Production, Work item, Fix
 forward, Break-glass): [CONTEXT.md](CONTEXT.md). How the pipeline works:
 [README.md](README.md).
 Why the pipeline is shaped this way: [PRINCIPLES.md](PRINCIPLES.md) — read it
-before changing the golden path or proposing a shortcut.
+before changing the pipeline or proposing a shortcut.
 
 ## A change, end to end
 
@@ -36,6 +36,30 @@ Production.** What ships:
   base-image bumps are `chore(deps)`. Dependabot's `commit-message.prefix`
   says which.
 
+## Reading a run
+
+A service has three workflows, one per event: `pull-request.yml`,
+`ship.yml`, `redeliver.yml`. Their runs read as Stages:
+
+- **Its name** says which event and what: "PR #12: feat(#7): …" (a pull
+  request), the merged PR's title under `ship` (a merge), "Re-deliver the
+  latest Release".
+- **Its graph** is one box per Stage: `ci / Build` → `ci / Accept` (pull
+  request), `ci / Build` → `ci / Accept` → `ci / Deliver` (Ship),
+  `ci / Deliver` (re-delivery). A failed box's failing step names the check
+  or the action.
+- **Its summary**, one at the top: Accept's table of checks on a pull
+  request; on Ship and re-delivery a heading — "Ship vX.Y.Z", "Ship <sha7>:
+  nothing to release", "Re-deliver vX.Y.Z", or "…: failed at <step>" — then
+  the Release, commit, digests and GitOps PR, and what each step said,
+  collapsed.
+
+```sh
+gh run list --workflow ship.yml --limit 5      # name, status, per merge
+gh run view RUN_ID                             # Stages and their steps
+gh run view RUN_ID --log-failed                # the failing step's log
+```
+
 ## Reading a PR's state
 
 Where a merged PR is, from its page or `gh`:
@@ -62,11 +86,12 @@ Where a merged PR is, from its page or `gh`:
 
 ## When a delivery goes wrong
 
-- **Re-deliver the latest Release** (a delivery died on the way):
-  `gh workflow run redeliver.yml` in the service repo (v3 services:
-  `gh workflow run pipeline.yml`). It promotes the existing Artifact again and
-  never rebuilds; it cannot deliver an older version. A version already
-  recorded changes nothing, and a Release already running stays running.
+- **Re-deliver the latest Release** (a delivery died on the way, the
+  summary says "failed at …" after the Release was cut):
+  `gh workflow run redeliver.yml` in the service repo. It promotes the
+  existing Artifact again and never rebuilds; it cannot deliver an older
+  version. A version already recorded changes nothing, and a Release already
+  running stays running.
 - **Fix forward.** A bad Release is fixed by the next one: a `fix(#N)` PR,
   merged when green.
 - **Break-glass** (a manual revert in homelab-k8s) is the human's call, never
@@ -74,18 +99,25 @@ Where a merged PR is, from its page or `gh`:
 
 ## Changing this repo (kindorg-hq/ci)
 
-Services follow the major tag `@v3`, so a change here reaches all of them at
-the next release of this repo. Each PR runs `self-test.yml`: the Checks, v4's `pr.yml` (job
-`ci`) and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the
-artifact path with a dry-run Release and promotion, the list form of the
-image actions (two fixture images in one job), the report dry run, the
-no-downgrade cases, the Application annotation cases, actionlint, and
-v4's `ship.yml` on the fixture with a dry-run Release, and v4's `redeliver.yml`
-as a dry run of this repo's latest Release. `ship.yml` and `redeliver.yml`
-share their Deliver steps from promote to report, kept the same in both files
-(self-test fails when they drift): change both. Show
-new behaviour there as a dry run when it would otherwise write somewhere. A change to an input or output of a
-reusable workflow or action is breaking (`!`).
+Services follow the major tag `@v4`, so a change here reaches all of them at
+the next release of this repo. Each PR runs `self-test.yml` with the PR's own
+actions on `fixtures/`: `pull-request.yml` (job `ci`), `ship.yml` with a
+dry-run Release (job `ship`), `redeliver.yml` as a dry run of this repo's
+latest Release (job `redeliver`), the list form of the image actions, the
+no-downgrade and Application annotation cases, and actionlint. Show new
+behaviour there as a dry run when it would otherwise write somewhere.
+
+- **One job per Stage**, named `Build`, `Accept` or `Deliver`; details are
+  its steps, named in words. No matrix, no further nesting: a service's
+  check names are `ci / <Stage>`, and its ruleset requires them.
+- **Change ship.yml and redeliver.yml together.** Their Deliver jobs are
+  kept step for step the same from promote to report (one file each: a
+  shared reusable workflow would nest the names a level deeper); self-test
+  fails when they drift.
+- **Breaking** (`!`): a change to an input or output of a workflow or
+  action, or to a job name (it is a required check name).
+- A required check renamed or removed here: switch this repo's ruleset to
+  the names the PR's run shows before merging, or the PR cannot merge.
 
 This repo is the exception to "a merge ships": merging to main only updates
 its release PR. **The human merges that PR**; never merge it or move a tag

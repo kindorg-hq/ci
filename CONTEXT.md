@@ -46,5 +46,5 @@ The documented exception to Fix forward: a manual revert in homelab-k8s when pro
 _Avoid_: hotfix (that is just a Release)
 
 **Golden path**:
-The shared pipeline this repo provides, entered through one workflow: a service states what it is (name, images, address), the golden path decides how it gets to Production. This repo itself does not take it: a human merges its release PR.
-_Avoid_: template, standard pipeline
+The shared pipeline this repo provides, entered through one workflow per event — the pull request (`pull-request.yml`), a merge to the default branch (`ship.yml`), a re-delivery by hand (`redeliver.yml`): a service states what it is (name, images, address), the golden path decides how it gets to Production. "Golden path" is a word for those who build ci; a service owner never needs it — their runs show Stages only (`ci / Build`, `ci / Accept`, `ci / Deliver`), and nothing they read is named after it. This repo itself does not take it: a human merges its release PR.
+_Avoid_: template, standard pipeline; in a service's runs, docs or check names (say the Stage)
