@@ -24,9 +24,13 @@
 #   push (default     Build the Artifact (running the Dockerfile's `test` stage
 #   branch)           when it has one) → Accept → Deliver: cut release (only on
 #                     a Releasable change: git-cliff tags vX.Y.Z on this very
-#                     commit) → promote, re-scan, GitOps PR (deliver.yml).
+#                     commit) → promote, re-scan, GitOps PR
+#                     (release-and-deliver.yml → deliver.yml).
 #   workflow_dispatch Re-deliver the latest Release: promote its Artifact again,
 #                     never rebuild.
+# Deliveries of one service never overtake each other: Deliver runs one at a
+# time per service repo (concurrency below), and the GitOps PR refuses a
+# version lower than the recorded one (actions/gitops-pr/no-downgrade.sh).
 #
 # It runs as the kindorg-ci GitHub App for the Release and the GitOps PR:
 # vars.KINDORG_CI_APP_ID (org variable) and secrets.KINDORG_CI_APP_KEY.
@@ -98,79 +102,30 @@ jobs:
       trivy-severity: ${{ inputs.trivy-severity }}
       ci-ref: ${{ inputs.ci-ref }}
 
-  release:
-    name: "Deliver: cut release"
-    # only on what Build and Accept passed: a red Accept releases nothing
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # one at a time, so two quick merges cannot compute the same version
-    concurrency:
-      group: golden-path-release-${{ github.repository }}
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    outputs:
-      released: ${{ steps.cut.outputs.released }}
-      version: ${{ steps.cut.outputs.version }}
-      tag: ${{ steps.cut.outputs.tag }}
-      url: ${{ steps.cut.outputs.url }}
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      # full history and tags: the version is computed since the last tag
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kindorg-hq/ci
-          ref: ${{ inputs.ci-ref }}
-          path: .kindorg-ci
-          persist-credentials: false
-      # the App, not GITHUB_TOKEN: its tag and Release may trigger workflows
-      - id: token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ vars.KINDORG_CI_APP_ID }}
-          private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
-      - id: cut
-        uses: ./.kindorg-ci/actions/cut-release
-        with:
-          token: ${{ steps.token.outputs.token }}
-
-  latest:
-    name: "Deliver: find the latest release"
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      version: ${{ steps.latest.outputs.version }}
-      tag: ${{ steps.latest.outputs.tag }}
-      url: ${{ steps.latest.outputs.url }}
-    steps:
-      - id: latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName) || {
-            echo "::error::no Release to re-deliver"; exit 1; }
-          url=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
-          { echo "tag=$tag"; echo "version=${tag#v}"; echo "url=$url"; } >> "$GITHUB_OUTPUT"
-          echo "Re-delivering the latest Release, [$tag]($url): its Artifact is promoted again, nothing is rebuilt." >> "$GITHUB_STEP_SUMMARY"
-
-  # Deliver: promote and re-scan, record in homelab-k8s, report
+  # Deliver: cut the Release (on workflow_dispatch: find the latest one), then
+  # promote, re-scan, record in homelab-k8s, report.
   deliver:
-    needs: [release, latest]
+    needs: build
     if: >-
-      !cancelled() &&
-      (needs.release.outputs.released == 'true' || needs.latest.result == 'success')
-    uses: $/.github/workflows/deliver.yml
+      !cancelled() && (
+        (github.event_name == 'push' && needs.build.result == 'success') ||
+        github.event_name == 'workflow_dispatch')
+    # Deliveries never overtake each other: one Deliver per service at a time,
+    # from cutting the Release to recording it in homelab-k8s.
+    # The group sits on this job, the caller, not on the jobs inside
+    # release-and-deliver.yml: a job that calls a workflow holds its group until
+    # the whole called workflow ends, while a group on an inner job is released
+    # when that job ends — the next run could then cut its Release and record it
+    # before this run records its own, rolling Production back. (The inner jobs
+    # must not reuse this group: they would wait on their own caller.)
+    # Not cancel-in-progress: a delivery half done is worse than a late one.
+    # GitHub keeps one pending run per group and drops older pending ones; that
+    # is fine — the next Release includes their commits. Workflow_dispatch
+    # (re-delivery) queues in the same group.
+    concurrency:
+      group: golden-path-deliver-${{ github.repository }}
+      cancel-in-progress: false
+    uses: $/.github/workflows/release-and-deliver.yml
     permissions:
       contents: read
       packages: write
@@ -178,11 +133,8 @@ jobs:
       deployments: write
     with:
       app: ${{ inputs.app }}
-      version: ${{ needs.release.outputs.version || needs.latest.outputs.version }}
-      ref: ${{ needs.release.outputs.tag || needs.latest.outputs.tag }}
-      release-url: ${{ needs.release.outputs.url || needs.latest.outputs.url }}
-      environment-url: ${{ inputs.url }}
       images: ${{ inputs.images }}
+      url: ${{ inputs.url }}
       trivy-severity: ${{ inputs.trivy-severity }}
       ci-ref: ${{ inputs.ci-ref }}
     secrets:

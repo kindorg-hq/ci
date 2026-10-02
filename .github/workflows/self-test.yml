@@ -37,6 +37,23 @@ jobs:
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color \
             -ignore 'reusable workflow call "\$/'
 
+  no-downgrade:
+    # The GitOps PR's guard (actions/gitops-pr/no-downgrade.sh), run against
+    # fixtures/gitops instead of homelab-k8s: a version lower than the recorded
+    # one fails, an equal (re-delivery) or higher one passes, an app with no
+    # version yet passes. Cases in no-downgrade.test.sh, which runs locally too.
+    name: "Accept: deliveries never go backwards"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash actions/gitops-pr/no-downgrade.test.sh
+
   golden-path:
     # The entry a service calls, on a pull request: it must dispatch to the
     # Checks, with its stages resolved from this commit ($/).

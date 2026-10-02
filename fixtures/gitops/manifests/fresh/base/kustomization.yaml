@@ -1,0 +1,8 @@
+# An app never delivered by the golden path: no version label yet.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+images:
+- name: ghcr.io/kindorg-hq/fresh
+  newTag: 7d3abc99918dc405132860c8b5b34aa1a3c7cd47

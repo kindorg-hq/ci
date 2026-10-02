@@ -1,0 +1,13 @@
+# What gitops-pr leaves behind after recording hello 1.4.0: the guard reads
+# app.kubernetes.io/version from here (self-test, no-downgrade).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+images:
+- digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  name: ghcr.io/kindorg-hq/hello
+labels:
+- includeTemplates: true
+  pairs:
+    app.kubernetes.io/version: 1.4.0
