@@ -12,6 +12,8 @@ main  build         Artifact :<commit-sha>     artifact scan
       deliver                                                                 promote :<sha> → :x.y.z
                                                                               (same digest), re-scan,
                                                                               GitOps PR ▸ checks ▸ merge
+                                                                              ▸ PRs `released`, "recorded",
+                                                                              `production` deployment
                                                                               ▸ ArgoCD ▸ Telegram
 ```
 
@@ -84,6 +86,20 @@ Plus, in the service repo:
 
 - **Only Releases are delivered.** A merge to main runs the Checks and updates
   the release PR; nothing reaches the cluster until that PR is merged.
+- **Delivery is visible on the PR.** Once the GitOps PR merges, the Release is
+  recorded: every PR in it (the PRs of its commits since the previous Release)
+  gets the `released` label and one comment "vX.Y.Z recorded" linking the
+  GitHub Release and the GitOps PR, and the release commit gets a GitHub
+  Deployment to `production` in state `in_progress`. ArgoCD then edits that
+  comment on the release commit's PR into "running" or "degraded" and sets the
+  deployment to `success` or `failure`. The `production` deployment is the
+  source of truth; recorded is not delivered. A re-delivery edits the comment,
+  never adds one.
+- **The comment tag is shared with homelab-k8s.** The comment carries
+  `<!-- argocd-notifications delivery -->`: ArgoCD Notifications'
+  `pullRequestComment` with `commentTag: delivery` finds it by that marker and
+  edits it in place; it finds the deployment by the release commit's full SHA
+  (`ref`) and `environment: production`. Change one side, change both.
 - **Fix forward.** No rollback in the pipeline. Break-glass is a manual revert
   in homelab-k8s, described in its README.
 - **Deliveries never overtake each other.** Two quick merges must not cut the
