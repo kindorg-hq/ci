@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/kindorg-hq/ci/compare/v1.1.0...v2.0.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* build the artifact once on merge; releases promote it ([#4](https://github.com/kindorg-hq/ci/issues/4))
+
+### Features
+
+* build the artifact once on merge; releases promote it ([#4](https://github.com/kindorg-hq/ci/issues/4)) ([a363d7b](https://github.com/kindorg-hq/ci/commit/a363d7b895324f825b0435c1da1f7ad33af5b6ab))
+
 ## [1.1.0](https://github.com/kindorg-hq/ci/compare/v1.0.0...v1.1.0) (2026-10-02)
 
 
