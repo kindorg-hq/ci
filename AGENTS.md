@@ -6,6 +6,7 @@ forward, Break-glass): [CONTEXT.md](CONTEXT.md). How the pipeline works:
 [README.md](README.md).
 Why the pipeline is shaped this way: [PRINCIPLES.md](PRINCIPLES.md) — read it
 before changing the pipeline or proposing a shortcut.
+Decisions that look like mistakes but are not: [docs/adr/](docs/adr/) — check before proposing a shortcut.
 
 ## A change, end to end
 
