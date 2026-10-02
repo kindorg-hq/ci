@@ -15,11 +15,13 @@ permissions:
 jobs:
   self-test:
     uses: ./.github/workflows/self-test.yml
-    # what self-test's jobs ask for; the one that pushes packages runs on PRs only
+    # what self-test's jobs ask for (golden-path.yml's included); the jobs
+    # that push packages or call golden-path.yml run on PRs only
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       packages: write
+      deployments: write
 
   release:
     needs: self-test
