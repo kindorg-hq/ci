@@ -307,7 +307,8 @@ jobs:
             id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
               --jq ".jobs[] | select(.name == \"$1\") | .id")
             [ -n "$id" ] || { echo "::error::no job '$1' in this run"; exit 1; }
-            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${id}/logs"
+            # curl, not gh: gh refuses a body with terminal escapes (log colours)
+            curl -fsSL --retry 5 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/jobs/${id}/logs"
           }
           ship=$(log "ship / Deliver")
           redeliver=$(log "redeliver / Deliver")
