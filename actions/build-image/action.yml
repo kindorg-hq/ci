@@ -1,19 +1,30 @@
 name: Build image
 description: >
-  Build one container image with buildx. When the Dockerfile has a `test`
-  stage, that stage is built first: the service's tests run in the image's own
-  environment, and a failure stops the Build. On a pull request it then only
-  proves the Dockerfile builds (loaded locally for scanning); on merge it
-  pushes the commit tag to ghcr and returns the digest.
+  Build a list of container images with buildx, one after the other in one
+  step: `images` is a JSON list of {"name", "context", "dockerfile"} (context
+  "." and dockerfile "Dockerfile" when left out). v3 callers pass one image as
+  `name`/`context`/`dockerfile` instead; that is a list of one. When an image's
+  Dockerfile has a `test` stage, that stage is built first: the service's
+  tests run in the image's own environment, and a failure stops the Build. On
+  a pull request it then only proves the Dockerfile builds (loaded locally as
+  local/<name>:check for scanning); on merge it pushes the commit tag to ghcr
+  and returns the digest. The first image that fails stops the step, named in
+  the error.
 inputs:
+  images:
+    description: >
+      JSON list of images to build, each {"name", "context", "dockerfile"}
+      (e.g. [{"name": "pepic"}, {"name": "pepic-worker", "dockerfile":
+      "worker/Dockerfile"}]). Takes precedence over name/context/dockerfile.
+    default: ""
   name:
-    description: Image name under ghcr.io/<owner>/ (e.g. pepic)
-    required: true
+    description: One image's name under ghcr.io/<owner>/ (e.g. pepic) — the v3 form; use `images` for a list
+    default: ""
   context:
-    description: Build context
+    description: Build context of the `name` image
     default: "."
   dockerfile:
-    description: Path to the Dockerfile
+    description: Path to the Dockerfile of the `name` image
     default: Dockerfile
   platform:
     description: Target platform (the cluster is arm64)
@@ -28,11 +39,17 @@ inputs:
     description: Token with packages:write (only when pushing)
     default: ""
 outputs:
+  images:
+    description: >
+      JSON list, in input order, of {"name", "ref", "digest"} per image: ref is
+      the local tag, or ghcr.io/<owner>/<name>@<digest> when pushed; digest is
+      empty unless pushed. scan-image takes it as its `images`.
+    value: ${{ steps.build.outputs.images }}
   ref:
-    description: The built image reference (local tag, or name@digest when pushed)
-    value: ${{ steps.out.outputs.ref }}
+    description: The first image's reference (local tag, or name@digest when pushed) — the v3 single-image output
+    value: ${{ steps.build.outputs.ref }}
   digest:
-    description: Image digest (only when pushed)
+    description: The first image's digest (only when pushed) — the v3 single-image output
     value: ${{ steps.build.outputs.digest }}
 runs:
   using: composite
@@ -46,83 +63,106 @@ runs:
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
 
-    # the service's tests: a stage named `test` in its Dockerfile
-    - id: test
-      shell: bash
-      env:
-        DOCKERFILE: ${{ inputs.dockerfile }}
-        NAME: ${{ inputs.name }}
-      run: |
-        if grep -qiE '^[[:space:]]*FROM[[:space:]].*[[:space:]]AS[[:space:]]+test[[:space:]]*$' "$DOCKERFILE"; then
-          echo "stage=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "stage=false" >> "$GITHUB_OUTPUT"
-          echo "**${NAME} has no tests:** no \`test\` stage in \`${DOCKERFILE}\`, nothing tested in Build." >> "$GITHUB_STEP_SUMMARY"
-        fi
-
-    - if: steps.test.outputs.stage == 'true'
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+    # buildx's GitHub Actions cache (type=gha) needs the runner's cache
+    # endpoint and token, which only actions see; hand them to the build step
+    # below (what build-push-action does for itself)
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       with:
-        context: ${{ inputs.context }}
-        file: ${{ inputs.dockerfile }}
-        target: test
-        platforms: ${{ inputs.platform }}
-        outputs: type=cacheonly
-        cache-from: |
-          type=gha,scope=${{ inputs.name }}
-          type=gha,scope=${{ inputs.name }}-test
-        cache-to: type=gha,mode=max,scope=${{ inputs.name }}-test
-
-    - if: steps.test.outputs.stage == 'true'
-      shell: bash
-      env:
-        NAME: ${{ inputs.name }}
-      run: echo "**${NAME}:** \`test\` stage passed." >> "$GITHUB_STEP_SUMMARY"
-
-    - id: tags
-      shell: bash
-      env:
-        OWNER: ${{ github.repository_owner }}
-        NAME: ${{ inputs.name }}
-        VERSION: ${{ inputs.version }}
-        PUSH: ${{ inputs.push }}
-      run: |
-        image="ghcr.io/${OWNER,,}/${NAME}"
-        if [ "$PUSH" = "true" ]; then
-          tags="${image}:${GITHUB_SHA}"
-          [ -n "$VERSION" ] && tags="${tags},${image}:${VERSION}"
-        else
-          tags="local/${NAME}:check"
-        fi
-        echo "image=$image" >> "$GITHUB_OUTPUT"
-        echo "tags=$tags" >> "$GITHUB_OUTPUT"
+        script: |
+          for (const key of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_CACHE_SERVICE_V2']) {
+            if (process.env[key]) core.exportVariable(key, process.env[key]);
+          }
 
     - id: build
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-      with:
-        context: ${{ inputs.context }}
-        file: ${{ inputs.dockerfile }}
-        platforms: ${{ inputs.platform }}
-        push: ${{ inputs.push == 'true' }}
-        load: ${{ inputs.push != 'true' }}
-        tags: ${{ steps.tags.outputs.tags }}
-        labels: |
-          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          org.opencontainers.image.revision=${{ github.sha }}
-          org.opencontainers.image.version=${{ inputs.version }}
-        cache-from: type=gha,scope=${{ inputs.name }}
-        cache-to: type=gha,mode=max,scope=${{ inputs.name }}
-
-    - id: out
       shell: bash
       env:
-        PUSH: ${{ inputs.push }}
-        IMAGE: ${{ steps.tags.outputs.image }}
-        DIGEST: ${{ steps.build.outputs.digest }}
+        IMAGES: ${{ inputs.images }}
         NAME: ${{ inputs.name }}
+        CONTEXT: ${{ inputs.context }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        PLATFORM: ${{ inputs.platform }}
+        PUSH: ${{ inputs.push }}
+        VERSION: ${{ inputs.version }}
+        OWNER: ${{ github.repository_owner }}
+        SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
       run: |
-        if [ "$PUSH" = "true" ]; then
-          echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
-        else
-          echo "ref=local/${NAME}:check" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        jq() { docker run --rm -i "$JQ" "$@"; }
+
+        # the list: `images`, or the v3 single image as a list of one
+        if [ -z "$IMAGES" ]; then
+          [ -n "$NAME" ] || { echo "::error::build-image: give \`images\` (a JSON list) or \`name\`"; exit 1; }
+          IMAGES=$(jq -nc --arg n "$NAME" --arg c "$CONTEXT" --arg d "$DOCKERFILE" \
+            '[{name: $n, context: $c, dockerfile: $d}]')
         fi
+        list=$(echo "$IMAGES" | jq -r '
+          if type == "array" and length > 0 and all(.[]; type == "object" and (.name | type) == "string")
+          then .[] | [.name, (.context // "."), (.dockerfile // "Dockerfile")] | @tsv
+          else error("images must be a non-empty JSON list of {\"name\", \"context\", \"dockerfile\"}") end') || {
+          echo "::error::build-image: images must be a non-empty JSON list of {\"name\", \"context\", \"dockerfile\"}, got: ${IMAGES}"; exit 1; }
+
+        meta=$(mktemp -d)
+        out=()
+        # fd 3: docker run -i (jq) inside the loop must not eat the list
+        while IFS=$'\t' read -r -u 3 name context dockerfile; do
+          [[ "$name" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || {
+            echo "::error::build-image: \"${name}\" is not an image name (lowercase letters, digits, . _ -)"; exit 1; }
+          image="ghcr.io/${OWNER,,}/${name}"
+          fail() { echo "::error::build-image: ${name}: $1"; exit 1; }
+          [ -f "$dockerfile" ] || fail "no Dockerfile at ${dockerfile}"
+
+          # the service's tests: a stage named `test` in its Dockerfile
+          if grep -qiE '^[[:space:]]*FROM[[:space:]].*[[:space:]]AS[[:space:]]+test[[:space:]]*$' "$dockerfile"; then
+            echo "::group::${name}: test stage"
+            docker buildx build "$context" --file "$dockerfile" --target test \
+              --platform "$PLATFORM" --output type=cacheonly \
+              --cache-from "type=gha,scope=${name}" \
+              --cache-from "type=gha,scope=${name}-test" \
+              --cache-to "type=gha,mode=max,scope=${name}-test,ignore-error=true" \
+              || fail "\`test\` stage failed (${dockerfile})"
+            echo "::endgroup::"
+            echo "**${name}:** \`test\` stage passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**${name} has no tests:** no \`test\` stage in \`${dockerfile}\`, nothing tested in Build." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$PUSH" = "true" ]; then
+            tags=(--tag "${image}:${GITHUB_SHA}")
+            [ -n "$VERSION" ] && tags+=(--tag "${image}:${VERSION}")
+            output=(--push)
+          else
+            tags=(--tag "local/${name}:check")
+            output=(--load)
+          fi
+          echo "::group::${name}: image"
+          docker buildx build "$context" --file "$dockerfile" \
+            --platform "$PLATFORM" "${tags[@]}" "${output[@]}" \
+            --label "org.opencontainers.image.source=${SOURCE}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --cache-from "type=gha,scope=${name}" \
+            --cache-to "type=gha,mode=max,scope=${name},ignore-error=true" \
+            --metadata-file "${meta}/${name}.json" \
+            || fail "image build failed (${dockerfile})"
+          echo "::endgroup::"
+
+          if [ "$PUSH" = "true" ]; then
+            digest=$(jq -r '."containerimage.digest" // ""' < "${meta}/${name}.json")
+            [ -n "$digest" ] || fail "pushed, but buildx reported no digest"
+            ref="${image}@${digest}"
+          else
+            digest=""
+            ref="local/${name}:check"
+          fi
+          echo "${name}: ${ref}"
+          out+=("$(printf '%s\t%s\t%s' "$name" "$ref" "$digest")")
+        done 3<<< "$list"
+        rm -rf "$meta"
+
+        images=$(printf '%s\n' "${out[@]}" | jq -Rnc '[inputs | split("\t") | {name: .[0], ref: .[1], digest: .[2]}]')
+        {
+          echo "images=${images}"
+          echo "ref=$(printf '%s' "${out[0]}" | cut -f2)"
+          echo "digest=$(printf '%s' "${out[0]}" | cut -f3)"
+        } >> "$GITHUB_OUTPUT"

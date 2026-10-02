@@ -69,15 +69,16 @@ the Artifact built and scanned on merge. A Release only adds a tag to its digest
 | `.github/workflows/release-and-deliver.yml` | The Deliver stage as one unit: `Deliver: cut release` (push) or `Deliver: find the latest release` (workflow_dispatch), then `deliver.yml`. Not called by services directly. |
 | `.github/workflows/deliver.yml` | Deliver a Release without building: promote and re-scan each image, record it in homelab-k8s, report on the PRs. |
 | `.github/workflows/release.yml` | release-please. In v3 only `release.self.yml` uses it, for this repo's own releases; services no longer do (callers on `@v2` read the v2 tag's copy). |
-| `.github/workflows/self-test.yml` | This repo's PR checks: the Checks and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the report dry run, the no-downgrade cases, the Application annotation cases, actionlint. |
+| `.github/workflows/self-test.yml` | This repo's PR checks: the Checks and `golden-path.yml` against `fixtures/hello` with the PR's own actions, the artifact path with a dry-run Release and promotion, the list form of the image actions (two fixture images in one job), the report dry run, the no-downgrade cases, the Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
-| `actions/build-image` | Build one image with buildx for linux/arm64; builds the Dockerfile's `test` stage first when it has one. On PRs loads it locally; on merge pushes `:<commit-sha>`. |
-| `actions/scan-image` | Trivy as a pinned container; fails on the given severity (CRITICAL) with a fix available. |
+| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step; v3's `name`/`context`/`dockerfile` is a list of one) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Output `images`: `[{"name", "ref", "digest"}]`. The first failing image stops it, named. |
+| `actions/scan-image` | Trivy as a pinned container over a list of images (`images`: JSON `[{"name", "ref"}]`, build-image's or promote-image's `images` output as is; v3's `ref` is a list of one); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
 | `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change. `dry-run` tags nothing. |
-| `actions/promote-image` | Add the version tag to the Artifact of a commit with crane; fails if the digest changed. |
+| `actions/promote-image` | Add the version tag to the Artifact of a commit with crane, for a list of images (`images`: JSON `[{"name"}]`; v3's `image` is a list of one); fails if a digest changed, naming the image. Output `images`: `[{"name", "image", "ref", "digest"}]`. |
 | `actions/gitops-pr` | Open, wait for and merge the PR to `manifests/<app>/base` and `apps/<app>.yaml` in homelab-k8s: digests pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`, cases in `annotate-app.test.sh`). Refuses a lower version first (`no-downgrade.sh`, cases in `no-downgrade.test.sh`). |
 | `actions/report-delivery` | `released` label and one "recorded" comment on every PR of the Release; `production` deployment of the release commit, `in_progress`. |
 | `fixtures/hello` | The smallest service (with a `test` stage) that self-test runs the path on. |
+| `fixtures/hello-worker`, `fixtures/broken` | A second image without a `test` stage, and one whose tests fail: the list form of the image actions in self-test. |
 | `fixtures/gitops` | A GitOps repo stand-in for the no-downgrade and annotation cases. |
 | `release-please-config.json`, `.release-please-manifest.json`, `CHANGELOG.md` | This repo's release-please state. |
 
