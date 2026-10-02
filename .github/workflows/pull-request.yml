@@ -111,6 +111,7 @@ jobs:
 
   title:
     name: "Accept: PR title names its change and work item"
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -155,7 +156,7 @@ jobs:
   dependencies:
     name: "Accept: no vulnerable dependencies added"
     # needs GitHub Advanced Security on private repos, free on public ones
-    if: "!github.event.repository.private"
+    if: github.event_name == 'pull_request' && !github.event.repository.private
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
