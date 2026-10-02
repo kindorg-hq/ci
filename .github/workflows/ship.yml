@@ -27,12 +27,15 @@
 #            pushed as ghcr.io/<owner>/<name>:<commit-sha> — the Artifact. Its
 #            output is the Artifact list, {name, image, digest} per image
 #            (actions/artifact/artifact.sh), which every step after only reads.
-#   Accept   Trivy over the pushed images (CRITICAL with a fix fails).
+#   Accept   Trivy over the pushed images (CRITICAL with a fix fails) — the
+#            scan of record: Deliver delivers this very digest moments later
+#            and does not scan it again (the summary links this job).
 #   Deliver  cut release (git-cliff: only a Releasable change tags this very
 #            commit vX.Y.Z; otherwise the run ends here, green), then
 #            Delivery, one step (actions/deliver): promote
 #            (:<commit-sha> → :X.Y.Z, same digest, checked against what Accept
-#            scanned), re-scan, record in homelab-k8s (GitOps PR: no
+#            scanned — no re-scan here: nothing has changed since
+#            Accept), record in homelab-k8s (GitOps PR: no
 #            downgrade, pinned by digest, the Release on the Application,
 #            verified to run every image@digest, checks waited for,
 #            merged), report on the PRs (`released`, one
@@ -46,7 +49,8 @@
 # Re-delivery (redeliver.yml) runs the same Delivery (actions/deliver), with
 # "find the latest Release" in place of "cut release" and, nothing being
 # built there, the release commit's Artifact list found in ghcr in place of
-# Build's. So the Deliver job is three steps: get the Release, deliver it,
+# Build's, and re-scanned (time, and new CVEs, may have passed since its
+# Accept). So the Deliver job is three steps: get the Release, deliver it,
 # the summary (actions/delivery-summary, naming the part that failed). The
 # actions write their notes to the file KINDORG_CI_NOTES names, not to their
 # own step summaries, so the run has one summary.
@@ -145,6 +149,9 @@ jobs:
     permissions:
       contents: read
       packages: read
+    outputs:
+      # this job: the scan of record, linked from Deliver's summary
+      url: ${{ steps.url.outputs.url }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -161,6 +168,11 @@ jobs:
           images: ${{ needs.build.outputs.images }}
           severity: ${{ inputs.trivy-severity }}
           token: ${{ github.token }}
+      - id: url
+        name: This scan's link, for the summary
+        env:
+          JOB: ${{ job.check_run_id }}
+        run: echo "url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/job/${JOB}" >> "$GITHUB_OUTPUT"
 
   deliver:
     name: Deliver
@@ -211,11 +223,12 @@ jobs:
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
       # Delivery, all of it (actions/deliver, as re-delivery runs it): the
-      # Artifact Build pushed and Accept scanned, promoted, re-scanned,
-      # recorded, reported. A dry run's report looks at the PR's own commits
+      # Artifact Build pushed and Accept scanned, promoted, recorded,
+      # reported. Not re-scanned: Accept scanned this digest moments ago with
+      # the same database; promoted = accepted is the evidence. A dry run's report looks at the PR's own commits
       # (the merge commit has no PR).
       - id: deliver
-        name: Deliver the Release (promote, re-scan, record in homelab-k8s, report)
+        name: Deliver the Release (promote, record in homelab-k8s, report)
         if: steps.cut.outputs.released == 'true' || (inputs.dry-run && steps.cut.outputs.version != '')
         uses: ./.kindorg-ci/actions/deliver
         with:
@@ -225,9 +238,9 @@ jobs:
           release-url: ${{ steps.cut.outputs.url }}
           ref: ${{ inputs.dry-run && (github.event.pull_request.head.sha || github.sha) || '' }}
           artifact: ${{ needs.build.outputs.images }}
+          rescan: "false"
           app: ${{ inputs.app }}
           environment-url: ${{ inputs.url }}
-          trivy-severity: ${{ inputs.trivy-severity }}
           dry-run: ${{ inputs.dry-run }}
           app-id: ${{ vars.KINDORG_CI_APP_ID }}
           private-key: ${{ secrets.KINDORG_CI_APP_KEY }}
@@ -245,6 +258,7 @@ jobs:
           sha: ${{ github.sha }}
           images: ${{ steps.deliver.outputs.images || needs.build.outputs.images }}
           gitops-pr: ${{ steps.deliver.outputs.gitops-pr }}
+          scan-of-record: ${{ needs.accept.outputs.url }}
           notes: ${{ needs.build.outputs.notes }}
           failed: >-
             ${{ steps.cut.outcome == 'failure' && 'cut release' ||

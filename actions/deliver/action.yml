@@ -1,8 +1,8 @@
 name: Deliver
 description: >
   Delivery of one Release, whole: its Artifact promoted to the version (same
-  digest), checked to be the Artifact it was given or found, re-scanned,
-  recorded in homelab-k8s (gitops-pr: record.sh and the GitOps PR), reported
+  digest), checked to be the Artifact it was given or found, re-scanned
+  when time has passed since Accept (`rescan`), recorded in homelab-k8s (gitops-pr: record.sh and the GitOps PR), reported
   on the PRs of the Release. Ship and re-deliver both call it and differ only
   in how they get the Release (cut it / the latest) and the Artifact (the one
   Build made and Accept scanned / found in ghcr for the release commit).
@@ -48,6 +48,14 @@ inputs:
   environment-url:
     description: Where the service answers, on the Application and the deployment
     default: ""
+  rescan:
+    description: >
+      "true": Trivy over the promoted images again — re-delivery, where time
+      (and new CVEs) may have passed since Accept. "false": Ship, where Accept
+      scanned this very digest moments before with the same database; the
+      promoted = given check is the evidence that what is delivered is what
+      was scanned, and Accept's scan is the scan of record.
+    default: "true"
   trivy-severity:
     default: CRITICAL
   dry-run:
@@ -71,6 +79,9 @@ outputs:
   failed-at:
     description: The part that failed, in words ("promote", "record in homelab-k8s", …); empty when none did
     value: ${{ steps.result.outputs.failed-at }}
+  rescanned:
+    description: '"true" when this delivery re-scanned the promoted images, "false" when it relied on Accept''s scan (`rescan: false`)'
+    value: ${{ steps.result.outputs.rescanned }}
   images:
     description: The Artifact list delivered — promoted when promote ran, else as given or found
     value: ${{ steps.result.outputs.images }}
@@ -113,7 +124,10 @@ runs:
           echo "::error::promoted images differ from the Artifact delivered: $GIVEN → $PROMOTED"; exit 1; }
         echo "$PROMOTED"
 
+    # only when time has passed since Accept (re-delivery); in Ship the
+    # check above ties the promoted digest to the one Accept just scanned
     - id: rescan
+      if: inputs.rescan == 'true'
       uses: ./.kindorg-ci/actions/scan-image
       with:
         images: ${{ steps.promote.outputs.images }}
@@ -175,6 +189,7 @@ runs:
         PROMOTE: ${{ steps.promote.outcome }}
         SAME: ${{ steps.same.outcome }}
         RESCAN: ${{ steps.rescan.outcome }}
+        RESCANNED: ${{ steps.rescan.outcome == 'success' }}
         FIXTURE: ${{ steps.fixture.outcome }}
         GITOPS: ${{ steps.gitops.outcome }}
         REPORT: ${{ steps.report.outcome }}
@@ -198,5 +213,6 @@ runs:
         elif [ -n "$PR_URL" ]; then outcome=recorded
         else outcome=already-recorded; fi
         eof="EOF_$(openssl rand -hex 8)"
-        { echo "outcome=$outcome"; echo "failed-at=$at"; echo "images<<$eof"; echo "$IMAGES"; echo "$eof"; } >> "$GITHUB_OUTPUT"
-        echo "Deliver: $outcome${at:+ at $at}"
+        { echo "outcome=$outcome"; echo "failed-at=$at"; echo "rescanned=$RESCANNED"
+          echo "images<<$eof"; echo "$IMAGES"; echo "$eof"; } >> "$GITHUB_OUTPUT"
+        echo "Deliver: $outcome${at:+ at $at}; re-scanned: $RESCANNED"

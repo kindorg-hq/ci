@@ -50,7 +50,8 @@ nothing to release".
                     │
                     ▼
 ┌─ ci / Accept ──────────────────────────┐
-│ Trivy over the pushed images           │
+│ Trivy over the pushed images — the     │
+│ scan of record (the summary links it)  │
 └────────────────────────────────────────┘
                     │
                     ▼  one at a time per service
@@ -64,7 +65,8 @@ nothing to release".
 │ │ promote :<sha> → :X.Y.Z, same      │ │
 │ │   digest, checked against what     │ │
 │ │   Accept scanned                   │ │
-│ │ re-scan                            │ │
+│ │ no re-scan: the same digest Accept │ │
+│ │   just scanned                     │ │
 │ │ record in homelab-k8s (GitOps PR:  │ │
 │ │   no downgrade, pinned by digest,  │ │
 │ │   Release on the Application,      │ │
@@ -102,10 +104,18 @@ built.
 only in how they get the Release (cut it / the latest) and where its Artifact
 comes from (Build's list / found for the release commit). Inside, in order:
 find the Artifact (when none is given) → promote → the promoted list is the
-one given or found → re-scan → record (`gitops-pr`) → report. It stops at the
-first part that fails and says which (`failed-at`, e.g. "record in
-homelab-k8s") and how it ended (`outcome`: `recorded`, `already-recorded`,
-`dry-run`, `failed`); the summary is headed with that part.
+one given or found → re-scan (when `rescan`) → record (`gitops-pr`) → report.
+It stops at the first part that fails and says which (`failed-at`, e.g.
+"record in homelab-k8s") and how it ended (`outcome`: `recorded`,
+`already-recorded`, `dry-run`, `failed`); the summary is headed with that part.
+
+**Re-scan only when time has passed since Accept.** In Ship the merge is the
+Release: Deliver promotes the digest Accept scanned moments before with the
+same Trivy database, so a second scan adds no evidence (`rescan: false`); the
+promoted = accepted check ties what is delivered to what was scanned, and the
+summary links the Accept job as the scan of record. Re-delivery delivers an
+older Release, so it re-scans the promoted images (new CVEs since its Accept
+fail it there).
 
 Stages are named Build, Accept, Deliver in every run, so everyone reads a
 pipeline the same way (Integrate and Rehearse have no environments here yet).
@@ -359,9 +369,9 @@ Move to v4 directly:
   same version twice, and an older run must never record its version after a
   newer one — that would roll Production back. Two mechanisms:
   - *One Deliver at a time per service.* The Deliver job — cut release (or
-    find the latest one) → promote → re-scan → GitOps PR → report, all one
-    job — runs in the concurrency group `golden-path-deliver-<owner/repo>`,
-    without cancel-in-progress; Ship's and re-delivery's share it (and v3's
+    find the latest one) → promote → re-scan (re-delivery) → GitOps PR →
+    report, all one job — runs in the concurrency group
+    `golden-path-deliver-<owner/repo>`, without cancel-in-progress; Ship's and re-delivery's share it (and v3's
     used the same name). GitHub keeps one pending run per group and drops
     older pending ones; that is accepted — the next Release includes their
     commits.

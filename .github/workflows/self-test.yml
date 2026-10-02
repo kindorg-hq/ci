@@ -202,7 +202,8 @@ jobs:
     # linux/amd64 in an arm64 index) → `ship / Deliver`: the Release cut as a
     # dry run on this repo's history (version and notes in the summary, no
     # tag), the image promoted to a throw-away tag without rebuilding (digest
-    # checked against Accept's), re-scanned, recorded in a copy of
+    # checked against Accept's) and — not re-scanned, Accept's scan of the
+    # same digest is the scan of record — recorded in a copy of
     # fixtures/gitops (app hello-dry-run: the diff in the summary), the report
     # on the PRs as a dry run; homelab-k8s untouched. Its own image name, so
     # no other job's image is pushed under it.
@@ -261,7 +262,8 @@ jobs:
   redeliver:
     # Re-delivery as a service calls it, on the fixture: one box,
     # `redeliver / Deliver` — the latest Release of this repo found, its
-    # commit's Artifact (above) promoted to a throw-away tag, re-scanned and
+    # commit's Artifact (above) promoted to a throw-away tag, re-scanned (time
+    # has passed since its Accept) and
     # recorded in a copy of fixtures/gitops, the report as a dry run on that
     # Release's PRs; homelab-k8s untouched.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -279,14 +281,51 @@ jobs:
       ci-ref: ${{ github.event.pull_request.head.sha }}
       dry-run: true
 
+  scan-of-record:
+    # Where the scan of record is, read from the two Deliver jobs above as
+    # they ran: Ship's (`rescan: false`) runs no Trivy — Accept scanned that
+    # digest moments before, promoted = accepted is the evidence — and
+    # re-delivery's (rescan on) does, time having passed since its Accept.
+    # Each says so in its log ("re-scanned: …", from actions/deliver).
+    name: "Deliver: Ship relies on Accept's scan, re-delivery re-scans"
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [ship, redeliver]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          log() {
+            local id
+            id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
+              --jq ".jobs[] | select(.name == \"$1\") | .id")
+            [ -n "$id" ] || { echo "::error::no job '$1' in this run"; exit 1; }
+            # curl, not gh: gh refuses a body with terminal escapes (log colours)
+            curl -fsSL --retry 5 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/jobs/${id}/logs"
+          }
+          ship=$(log "ship / Deliver")
+          redeliver=$(log "redeliver / Deliver")
+          grep -q "Deliver: dry-run; re-scanned: false" <<< "$ship" || { echo "::error::ship / Deliver did not say 're-scanned: false'"; exit 1; }
+          ! grep -q "aquasec/trivy" <<< "$ship" || { echo "::error::ship / Deliver ran Trivy"; exit 1; }
+          grep -q "Deliver: dry-run; re-scanned: true" <<< "$redeliver" || { echo "::error::redeliver / Deliver did not say 're-scanned: true'"; exit 1; }
+          grep -q "aquasec/trivy" <<< "$redeliver" || { echo "::error::redeliver / Deliver ran no Trivy"; exit 1; }
+          echo "ship / Deliver: no Trivy, Accept's scan of record; redeliver / Deliver: re-scanned: ok"
+
   deliver:
     # Delivery is one module, actions/deliver; Ship and re-delivery only
     # choose the Release. Called here directly, as a dry run, on the Artifact
     # Ship's Build pushed (hello-ship:<sha>): no Artifact given → found by
-    # commit, promoted, re-scanned, recorded in a copy of fixtures/gitops
+    # commit, promoted, re-scanned (rescan's default), recorded in a copy of fixtures/gitops
     # (hello-dry-run, at 1.0.0) with a real diff, reported as a dry run; then
-    # the same list given (as Ship gives it) with a lower version → refused,
-    # "failed at record"; then an image with no Artifact for the commit →
+    # the same list given (as Ship gives it, rescan false) with a lower
+    # version → not re-scanned, refused, "failed at record"; then an image with no Artifact for the commit →
     # "failed at find". The summary of the refused one is this job's.
     name: "Deliver: one module delivers a Release and names where it stops"
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -330,12 +369,14 @@ jobs:
           IMAGES: ${{ steps.found.outputs.images }}
           DIFF: ${{ steps.found.outputs.diff }}
           GITOPS_PR: ${{ steps.found.outputs.gitops-pr }}
+          RESCANNED: ${{ steps.found.outputs.rescanned }}
         run: |
           set -euo pipefail
           jq() { docker run --rm -i "$JQ" "$@"; }
           echo "$IMAGES"; echo "$DIFF"
           [ "$OUTCOME" = dry-run ] && [ -z "$FAILED_AT" ] || { echo "::error::want outcome dry-run, no failed-at; got '$OUTCOME' '$FAILED_AT'"; exit 1; }
           [ -z "$GITOPS_PR" ] || { echo "::error::a dry run opened $GITOPS_PR"; exit 1; }
+          [ "$RESCANNED" = true ] || { echo "::error::rescan defaults to true, yet it did not re-scan ('$RESCANNED')"; exit 1; }
           ref=$(echo "$IMAGES" | jq -r '.[] | select(.name == "hello-ship") | "\(.image)@\(.digest)"')
           [[ "$ref" == *@sha256:* ]] || { echo "::error::no hello-ship digest in $IMAGES"; exit 1; }
           for want in "${ref#*@}" "app.kubernetes.io/version: 1.1.0" "kindorg.dev/source-sha: $GITHUB_SHA"; do
@@ -353,6 +394,7 @@ jobs:
           sha: ${{ github.sha }}
           ref: ${{ github.event.pull_request.head.sha }}
           artifact: ${{ steps.found.outputs.images }}
+          rescan: "false"
           app: hello-dry-run
           dry-run: "true"
           token: ${{ github.token }}
@@ -384,6 +426,7 @@ jobs:
       - name: Each failure named, the outputs there though the module failed
         env:
           DOWN: ${{ steps.downgrade.outcome }} ${{ steps.downgrade.outputs.outcome }} ${{ steps.downgrade.outputs.failed-at }}
+          DOWN_RESCANNED: ${{ steps.downgrade.outputs.rescanned }}
           MISS: ${{ steps.missing.outcome }} ${{ steps.missing.outputs.outcome }} ${{ steps.missing.outputs.failed-at }}
         run: |
           set -euo pipefail
@@ -391,6 +434,7 @@ jobs:
             if [ "$2" = "$3" ]; then echo "ok   $1: $3"; else echo "::error::$1: want '$2', got '$3'"; exit 1; fi; }
           check "lower version" "failure failed record in the fixture GitOps tree" "$DOWN"
           check "no Artifact" "failure failed find the release commit's Artifact" "$MISS"
+          check "rescan: false (as Ship gives it), no re-scan" "false" "$DOWN_RESCANNED"
 
   image-list:
     # The list form the workflows use — one job per Stage, images looped
