@@ -237,26 +237,22 @@ secrets, which the pull request does not need.
 
 ## How Build caches
 
-Build reuses layers through two caches; what they cannot help with, the
-Dockerfile decides.
-
-- **ghcr, `ghcr.io/<owner>/<name>:buildcache`** (every stage, `mode=max`):
-  written by a merge's Build, read by every Build — the next merge and every
-  pull request. PRs read it anonymously, so the package must be public
-  (private: the import logs an error, the build goes on uncached).
-- **GitHub Actions cache** (`scope=<name>`, `<name>-test`): written by a
-  pull request, for its own next push. GitHub keeps it per ref: a PR's cache
-  is never read by its merge or by another PR — which is why a merge cannot
-  reuse what its PR built, and the ghcr cache exists.
+Build reuses layers through one cache, **`ghcr.io/<owner>/<name>:buildcache`**
+(every stage, `mode=max`): written by a merge's Build, read by every Build —
+the next merge and every pull request. PRs read it anonymously, so the
+package must be public (private: the import logs an error, the build goes on
+uncached). There is no GitHub Actions cache: GitHub keeps it per ref, so what
+a PR wrote was never read by its merge or by another PR, and writing it cost
+a PR more time than its next push saved.
 
 **The trust rule: what a merge's Build reads, only merges write.** A pull
 request controls its own caller workflow, so it must never write a cache the
-default branch consumes. build-image writes the ghcr cache only on a push to
-the default branch with `push: "true"`, decided from the run's event and ref
-(not an input a PR could set); every other build writes only its own ref's
-GitHub Actions cache, which GitHub never shows the default branch. PRs from
-forks get no `packages: write` at all; self-test checks that build-image
-pushing from a PR leaves the ghcr cache unwritten.
+default branch consumes. build-image writes the cache only on a push to the
+default branch with `push: "true"`, decided from the run's event and ref
+(`github.event_name`, `github.ref` — not an input a PR could set); every
+other build only reads. `pull-request.yml` grants no `packages: write`, and
+PRs from forks never get it; self-test checks that build-image pushing from
+a PR writes no cache.
 
 **What a merge reuses** is everything before the first changed input:
 base image, system packages, downloaded dependencies — and compiled
@@ -279,7 +275,7 @@ new commit). To benefit:
   `.git` would end up in images that copy the whole context.
 - **Cache mounts** (`RUN --mount=type=cache,…`) help only within one Build
   (the test stage, then the image, on the same runner): they are not in
-  either cache, so the next run starts them empty. Keep what must last
+  the cache, so the next run starts them empty. Keep what must last
   across runs in layers.
 
 ## Migrating from v3 → v4
@@ -362,7 +358,7 @@ Move to v4 directly:
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
 | `.github/workflows/release.yml` | release-please, for this repo's own releases (callers on `@v2` read the v2 tag's copy). |
 | `actions/artifact/artifact.sh` | The Artifact list `[{"name", "image", "digest"}]`: its shape, the one name → address mapping, its check (the offending entry named), refs. Sourced by the actions below and the workflows; cases in `artifact.test.sh`. |
-| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Reads the ghcr cache `:buildcache` and the GitHub Actions cache; only a merge writes the ghcr one (see "How Build caches"). Output `images`: the Artifact list. The first failing image stops it, named. |
+| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Reads the ghcr cache `:buildcache`; only a merge writes it (see "How Build caches"). Output `images`: the Artifact list. The first failing image stops it, named. |
 | `actions/find-artifact` | Re-delivery's Artifact list: for the service's `images` and a commit, the digest each `<image>:<commit-sha>` holds in ghcr; none fails, named. |
 | `actions/scan-image` | Trivy as a pinned container over an Artifact list (build-image's, find-artifact's or promote-image's `images` output as is); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
 | `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change, as the kindorg-ci App (`app-id`, `private-key`). `dry-run` tags nothing and needs no App. |

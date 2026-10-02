@@ -602,7 +602,7 @@ jobs:
     # The Build cache, part 2 — the next pull request, on a fresh runner with
     # no packages permission, changes the code and builds with build-image:
     # the dependencies (fixtures/hello-go's `src` stage) must come from the
-    # cache part 1 wrote, compiled before this job started, not again here.
+    # cache part 1 wrote (the same /deps-built-at), not compiled again here.
     name: "Build: a pull request reuses what the merge built"
     needs: build-cache-merge
     runs-on: ubuntu-24.04-arm
@@ -631,9 +631,7 @@ jobs:
           set -euo pipefail
           took=$(( $(date +%s) - START ))
           built=$(docker run --rm --entrypoint cat "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hello-go" /deps-built-at)
-          [ "$built" -lt "$START" ] || {
-            echo "::error::the dependencies were compiled again in this job (at ${built}, job step started ${START}): the cache was not reused"; exit 1; }
-          from="an earlier run of this pull request (its own GitHub Actions cache)"
-          [ "$built" = "$SEEDED" ] && from="the registry cache the merge wrote"
-          echo "**Build cache:** with new code, build-image (test stage + image) took ${took}s; the dependencies came from ${from}." >> "$GITHUB_STEP_SUMMARY"
-          echo "dependencies reused from ${from}: ok (${took}s)"
+          [ "$built" = "$SEEDED" ] || {
+            echo "::error::the dependencies were compiled at ${built}, not taken from the cache the merge wrote (compiled at ${SEEDED})"; exit 1; }
+          echo "**Build cache:** with new code, build-image (test stage + image) took ${took}s; the dependencies came from the cache the merge wrote." >> "$GITHUB_STEP_SUMMARY"
+          echo "dependencies reused from the cache the merge wrote: ok (${took}s)"

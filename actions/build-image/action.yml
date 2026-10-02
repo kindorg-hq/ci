@@ -11,12 +11,10 @@ description: >
   named in the error. Its output is the Artifact list
   (actions/artifact/artifact.sh), made here. Cache: every build reads
   `ghcr.io/<owner>/<name>:buildcache` (anonymously on a pull request, so the
-  package must be public) and this ref's GitHub Actions cache; a merge
-  (push) writes the registry cache, mode=max, a pull request writes only its
-  own GitHub Actions cache (README, "How Build caches"). Only a push to the
-  default branch with `push: "true"` writes the registry cache — decided from
-  the run's event, not an input, so no pull request can write a cache a merge
-  reads.
+  package must be public); only a push to the default branch with `push:
+  "true"` writes it (mode=max) — decided from the run's event, not an input,
+  so no pull request writes a cache a merge reads (README, "How Build
+  caches").
 inputs:
   images:
     description: >
@@ -52,16 +50,6 @@ runs:
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
 
-    # buildx's GitHub Actions cache (type=gha) needs the runner's cache
-    # endpoint and token, which only actions see; hand them to the build step
-    # below (what build-push-action does for itself)
-    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-      with:
-        script: |
-          for (const key of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_CACHE_SERVICE_V2']) {
-            if (process.env[key]) core.exportVariable(key, process.env[key]);
-          }
-
     - id: build
       shell: bash
       env:
@@ -88,21 +76,18 @@ runs:
           fail() { echo "::error::build-image: ${name}: $1"; exit 1; }
           [ -f "$dockerfile" ] || fail "no Dockerfile at ${dockerfile}"
 
-          # Cache. A merge writes every stage's layers to the registry, and
-          # every build — the next merge, any PR — reads them: GitHub Actions
-          # caches are per ref, so one a PR writes is never read by its merge
-          # or by another PR. Any other build (a PR) writes only its own ref's
-          # GitHub Actions cache, for its next push — never one a merge reads.
-          # Missing or unreadable (first build, private package): the import
-          # logs an error and the build goes on uncached.
+          # Cache: what a merge built, every stage (mode=max), read by every
+          # build — the next merge and any PR. Only a merge writes it
+          # (WRITE_CACHE). No GitHub Actions cache: it is per ref, so what a
+          # PR wrote was never read by its merge, and writing it cost a PR
+          # more than its next push saved. Missing or unreadable (first
+          # build, private package): the import logs an error and the build
+          # goes on uncached.
           cache="${image}:buildcache"
-          from=(--cache-from "type=registry,ref=${cache}" --cache-from "type=gha,scope=${name}")
+          from=(--cache-from "type=registry,ref=${cache}")
+          to=()
           if [ "$WRITE_CACHE" = "true" ]; then
-            test_to=()
-            image_to=(--cache-to "type=registry,ref=${cache},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true")
-          else
-            test_to=(--cache-to "type=gha,mode=max,scope=${name}-test,ignore-error=true")
-            image_to=(--cache-to "type=gha,mode=max,scope=${name},ignore-error=true")
+            to=(--cache-to "type=registry,ref=${cache},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true")
           fi
 
           # the service's tests: a stage named `test` in its Dockerfile
@@ -110,7 +95,7 @@ runs:
             echo "::group::${name}: test stage"
             docker buildx build "$context" --file "$dockerfile" --target test \
               --platform "$PLATFORM" --output type=cacheonly \
-              "${from[@]}" --cache-from "type=gha,scope=${name}-test" "${test_to[@]}" \
+              "${from[@]}" \
               || fail "\`test\` stage failed (${dockerfile})"
             echo "::endgroup::"
             echo "**${name}:** \`test\` stage passed." >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"
@@ -132,7 +117,7 @@ runs:
             --platform "$PLATFORM" "${tags[@]}" "${output[@]}" \
             --label "org.opencontainers.image.source=${SOURCE}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            "${from[@]}" "${image_to[@]}" \
+            "${from[@]}" "${to[@]}" \
             --metadata-file "${meta}/${name}.json" \
             || fail "image build failed (${dockerfile})"
           echo "::endgroup::"
