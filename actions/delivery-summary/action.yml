@@ -33,6 +33,11 @@ inputs:
   gitops-pr:
     description: The GitOps PR merged by this run; empty when nothing new was recorded
     default: ""
+  scan-of-record:
+    description: >
+      The Accept job whose scan the delivery relies on (Ship: its URL — Deliver
+      does not scan again); empty: Deliver re-scanned (re-delivery)
+    default: ""
   notes:
     description: Markdown notes of the jobs before (e.g. Build's), shown with the steps' own
     default: ""
@@ -52,6 +57,7 @@ runs:
         SHA: ${{ inputs.sha }}
         IMAGES: ${{ inputs.images }}
         GITOPS_PR: ${{ inputs.gitops-pr }}
+        SCAN_OF_RECORD: ${{ inputs.scan-of-record }}
         NOTES: ${{ inputs.notes }}
         FAILED: ${{ inputs.failed }}
         JQ: ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
@@ -63,6 +69,10 @@ runs:
         tag=${VERSION:+v$VERSION}
         release="${tag:-none}"
         [ -n "$RELEASE_URL" ] && release="[$tag]($RELEASE_URL)"
+        # Ship relies on Accept's scan of the same digest; re-delivery re-scans
+        rescanned="re-scanned, "; scan="Deliver's re-scan"
+        if [ -n "$SCAN_OF_RECORD" ]; then
+          rescanned=""; scan="[Accept]($SCAN_OF_RECORD): the same digest, not scanned again"; fi
 
         if [ -n "$FAILED" ]; then
           s "## $KIND ${tag:-$sha7}: failed at $FAILED"
@@ -75,7 +85,7 @@ runs:
           s "No Releasable change (feat, fix, perf or breaking) since the last Release: this commit is built and accepted, and ships with the next Release."
         elif [ "$OUTCOME" = dry-run ]; then
           s "## $KIND $tag (dry run)"
-          s "Would deliver $tag on \`$sha7\`: promoted to a throw-away tag, re-scanned, and recorded in a copy of the fixture GitOps tree (the diff is in the notes); nothing tagged, homelab-k8s untouched, no PR touched."
+          s "Would deliver $tag on \`$sha7\`: promoted to a throw-away tag, ${rescanned}and recorded in a copy of the fixture GitOps tree (the diff is in the notes); nothing tagged, homelab-k8s untouched, no PR touched."
         elif [ "$OUTCOME" = recorded ]; then
           s "## $KIND $tag"
           s "**$tag recorded** in homelab-k8s. Next, without anyone: ArgoCD syncs it and turns the comment on the release commit's PR into \"running\" (or \"degraded\"); the \`production\` deployment of \`$sha7\` is the source of truth."
@@ -91,6 +101,7 @@ runs:
         s "| Commit | \`$SHA\` |"
         rows=$(echo "${IMAGES:-[]}" | jq -r '[.[] | select(.digest != null and .digest != "") | "`\(.name)@\(.digest)`"] | join("<br>")' 2>/dev/null || true)
         s "| Images | ${rows:-none} |"
+        s "| Scan of record | $scan |"
         s "| GitOps PR | ${GITOPS_PR:-none} |"
 
         notes_file=${KINDORG_CI_NOTES:-}

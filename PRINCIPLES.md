@@ -103,8 +103,9 @@ the risks of a change and of the process; prefer automated mitigations to
 manual approvals. Pipelines leave immutable evidence of what they mitigated.
 
 Here: tests and image scan (broken or vulnerable code), gitleaks (secrets),
-dependency review (vulnerable dependencies), re-scan on Delivery (new CVEs
-since merge), no-downgrade guard and per-service concurrency (a run rolling
+dependency review (vulnerable dependencies), re-scan on re-delivery (new CVEs
+since that Release's Accept; Ship delivers the digest Accept scanned moments
+before, so its Accept scan is the scan of record), no-downgrade guard and per-service concurrency (a run rolling
 Production back). The merge is the approval. Evidence: scan results in runs,
 Release notes, the PR's recorded/running comment, the `production`
 deployment as the source of truth. Attestations and SBOMs: planned, not done.

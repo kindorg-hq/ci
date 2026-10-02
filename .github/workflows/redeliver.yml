@@ -142,6 +142,8 @@ jobs:
           sha: ${{ steps.release.outputs.sha }}
           release-url: ${{ steps.release.outputs.url }}
           images: ${{ inputs.images }}
+          # time (and new CVEs) may have passed since this Release's Accept
+          rescan: "true"
           app: ${{ inputs.app }}
           environment-url: ${{ inputs.url }}
           trivy-severity: ${{ inputs.trivy-severity }}
