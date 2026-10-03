@@ -140,6 +140,7 @@ jobs:
         uses: ./.kindorg-ci/actions/build-image
         with:
           images: ${{ inputs.images }}
+          test-compose: ${{ inputs.test-compose }}
           push: "true"
           token: ${{ github.token }}
       # pulled by digest: the very images Accept scans and Deliver promotes
