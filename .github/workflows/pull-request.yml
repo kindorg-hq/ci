@@ -101,6 +101,7 @@ jobs:
         uses: ./.kindorg-ci/actions/build-image
         with:
           images: ${{ inputs.images }}
+          test-compose: ${{ inputs.test-compose }}
       - name: Compose tests (${{ inputs.test-compose }}) against the built images
         if: inputs.test-compose != '' && inputs.images != '[]'
         uses: ./.kindorg-ci/actions/test-compose

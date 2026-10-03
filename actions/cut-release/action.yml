@@ -7,7 +7,8 @@ description: >
   the GitHub Release with the notes grouped by type. Otherwise nothing is
   tagged and the run summary says why. dry-run computes and shows the same,
   without tagging. Re-running on a commit that already has its tag is a no-op
-  that returns that Release.
+  that returns that Release. No vX.Y.Z tag in the history fails: the base is
+  tagged by hand (README, "A service with no Release yet").
 inputs:
   dry-run:
     description: '"true": compute the version and notes, tag nothing'
@@ -17,10 +18,6 @@ inputs:
       The kindorg-ci App's client id (vars.KINDORG_CI_CLIENT_ID): its token
       tags and creates the Release (one by GITHUB_TOKEN would trigger no
       workflows). Not needed in dry-run.
-    default: ""
-  app-id:
-    description: The kindorg-ci App's numeric id; still taken, use client-id
-    deprecationMessage: Use 'client-id' (vars.KINDORG_CI_CLIENT_ID) instead.
     default: ""
   private-key:
     description: The kindorg-ci App's private key; not needed in dry-run
@@ -49,7 +46,7 @@ runs:
       if: inputs.dry-run != 'true'
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
-        client-id: ${{ inputs.client-id || inputs.app-id }}
+        client-id: ${{ inputs.client-id }}
         private-key: ${{ inputs.private-key }}
 
     - id: cut
@@ -89,13 +86,20 @@ runs:
         fi
 
         last=$(git tag --merged "$sha" --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+        # no base tag: the whole history would become the first Release's
+        # notes (a fork's upstream commits included); the base is tagged by hand
+        [ -n "$last" ] || {
+          echo "::error::cut-release: no vX.Y.Z tag in the history of $sha, so the first Release would be cut from the whole history. Tag the base first (README, \"A service with no Release yet\"), then merge again."
+          summary "### No Release: no base tag"
+          summary "No \`vX.Y.Z\` tag in this commit's history. Tag the commit in Production (or the first commit) as the base, e.g. \`v1.0.0\`; see README, \"A service with no Release yet\"."
+          exit 1; }
         # Releasable: feat, fix or perf, or breaking (! or BREAKING CHANGE)
         commits=$(cliff --unreleased --context 2>/dev/null | jq -c '[.[0].commits[] | {
             line: (.raw_message | split("\n")[0]),
             releasable: (.breaking or (.raw_message | test("^(feat|fix|perf)(\\([^)]*\\))?!?:")))}]')
         if [ "$(echo "$commits" | jq '[.[] | select(.releasable)] | length')" = 0 ]; then
           summary "### No Release"
-          summary "No Releasable change (feat, fix, perf or breaking) since ${last:-the first commit}: this commit is built and accepted, nothing is tagged or delivered."
+          summary "No Releasable change (feat, fix, perf or breaking) since $last: this commit is built and accepted, nothing is tagged or delivered."
           if [ "$(echo "$commits" | jq length)" -gt 0 ]; then
             summary ""
             summary "Changes that ship with the next Release:"
@@ -113,14 +117,14 @@ runs:
 
         if [ "$DRY_RUN" = true ]; then
           summary "### Dry run: would release $tag"
-          summary "On \`$sha\`, after ${last:-the first commit}. Nothing tagged."
+          summary "On \`$sha\`, after $last. Nothing tagged."
         else
           # the tag goes on this very commit, created with the Release
           url=$(gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$sha" \
             --title "$tag" --notes-file "$notes")
           out released true; out url "$url"
           summary "### Released [$tag]($url)"
-          summary "On \`$sha\`, after ${last:-the first commit}."
+          summary "On \`$sha\`, after $last."
         fi
         summary ""
         cat "$notes" >> "${KINDORG_CI_NOTES:-$GITHUB_STEP_SUMMARY}"

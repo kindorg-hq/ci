@@ -125,6 +125,15 @@ commits change workflow files without it (this repo's 4.1.0 failed with
 "Resource not accessible by integration" until it was granted, 2026-10-03).
 The trade-off: whoever holds its key, the org secret `KINDORG_CI_APP_KEY`,
 can now change workflows in the repos the App is installed on.
+One named exception to "no secrets where a PR's code runs": self-test's
+record-dry-run job (`Deliver: a dry-run record in the real homelab-k8s
+changes nothing`) gives a same-repo pull request the App key, to mint a
+token limited to `contents: read` on homelab-k8s. A fork's PR and
+Dependabot's never get it; a same-repo PR is opened only by the one
+maintainer (or an agent on their behalf), and that PR's workflow code could
+use the key unrestricted. Accepted, because the job is what proves a change
+here re-records Production unchanged before it can reach a service; moving
+it to push-only would find that out after the merge.
 
 ## We automate all the right things
 

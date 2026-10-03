@@ -64,10 +64,6 @@ inputs:
   client-id:
     description: The kindorg-ci App's client id (vars.KINDORG_CI_CLIENT_ID), for the GitOps PR; not needed in a dry run
     default: ""
-  app-id:
-    description: The kindorg-ci App's numeric id; still taken, use client-id
-    deprecationMessage: Use 'client-id' (vars.KINDORG_CI_CLIENT_ID) instead.
-    default: ""
   private-key:
     description: The kindorg-ci App's private key; not needed in a dry run
     default: ""
@@ -166,7 +162,7 @@ runs:
         release-url: ${{ inputs.release-url }}
         source-sha: ${{ inputs.sha }}
         environment-url: ${{ inputs.environment-url }}
-        client-id: ${{ inputs.client-id || inputs.app-id }}
+        client-id: ${{ inputs.client-id }}
         private-key: ${{ inputs.private-key }}
 
     # Also when nothing new was recorded: a delivery that died after the

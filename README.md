@@ -215,8 +215,6 @@ Before the first merge:
   Release) and on homelab-k8s (it opens and merges the GitOps PR). The repo
   sees the org variable `KINDORG_CI_CLIENT_ID` (the App's client id) and the
   org secret `KINDORG_CI_APP_KEY`; `secrets: inherit` passes the secret on.
-  (`KINDORG_CI_APP_ID`, the numeric id, is only read by frozen `@v3` and
-  earlier callers; the actions still take `app-id`, deprecated, for them.)
 - **homelab-k8s has `manifests/<app>/base/kustomization.yaml`** whose
   containers name each image exactly `ghcr.io/<owner>/<name>` (a tag is fine,
   the pin replaces it), and **`apps/<app>.yaml`**, the Application named
@@ -229,9 +227,14 @@ Before the first merge:
   is `type(#N): summary` (see [AGENTS.md](AGENTS.md)); git-cliff reads it.
 - **Tests, optional**: a stage `FROM … AS test` in the Dockerfile. Build runs
   it before the image, on every PR and every merge, for linux/arm64; a failure
-  fails Build. Keep the image as the last stage. Without a `test` stage the
-  run summary says the service has no tests. Tests that need a database:
-  `test-compose`, below.
+  fails Build. Keep the image as the last stage. Without a `test` stage and
+  without `test-compose` the run summary says the service has no tests; with
+  `test-compose` it names the compose file instead. Tests that need a
+  database: `test-compose`, below.
+- **A base tag** (`vX.Y.Z`) in the default branch's history: the next
+  version counts from it. With none, Ship fails at cut release rather than
+  cut the first Release from the whole history; see "A service with no
+  Release yet".
 - **Ruleset** (public repos; on the free plan private ones cannot require
   checks): require two checks, whatever the number of images:
   - `ci / Build` — the `test` stage, every image build, the compose tests;
@@ -250,7 +253,7 @@ value):
 
 ```yaml
     with:
-      images: '[{"name": "the-blog"}]'
+      images: '[{"name": "blog"}]'
       test-compose: compose.test.yml
 ```
 
@@ -260,8 +263,9 @@ After Build has built the images, it runs that file's service **`test`**
 exit code decides: non-zero fails `ci / Build`, so nothing after it runs (no
 Accept, no Release). The contract:
 
-- **`IMAGE_<NAME>`** per image of `images`: the name upper-cased, `-` and `.`
-  as `_` (`the-blog` → `IMAGE_THE_BLOG`, `jtbd-web` → `IMAGE_JTBD_WEB`). On a
+- **`IMAGE_<NAME>`** per image of `images`, derived from the image's `name`
+  (not the repo's or the app's): upper-cased, `-` and `.` as `_` (`blog` →
+  `IMAGE_BLOG`, `jtbd-web` → `IMAGE_JTBD_WEB`). On a
   pull request it is the image loaded locally,
   `ghcr.io/<owner>/<name>`; on a merge `ghcr.io/<owner>/<name>@sha256:…`,
   pulled by digest — the very image Accept scans and Deliver promotes.
@@ -296,7 +300,7 @@ services:
       interval: 2s
       retries: 30
   test:
-    image: ${IMAGE_THE_BLOG:?set by ci}
+    image: ${IMAGE_BLOG:?set by ci}
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_USER: postgres
@@ -360,6 +364,31 @@ new commit). To benefit:
   (the test stage, then the image, on the same runner): they are not in
   the cache, so the next run starts them empty. Keep what must last
   across runs in layers.
+
+## A service with no Release yet
+
+The next version counts from the last `vX.Y.Z` tag in the default branch's
+history, and the notes list the commits since. With no tag, cut release
+fails ("no vX.Y.Z tag") instead of making a first Release out of the whole
+history — for a fork, the upstream's commits. Tag the base before the first
+merge with v4:
+
+- **Already in Production, no Releases** (a fork or an import with unrelated
+  history, no v2/v3 tags): tag the commit Production runs as `v1.0.0` and
+  push the tag, then re-deliver it, so homelab-k8s records it and the next
+  Releasable merge is v1.0.1 or v1.1.0:
+
+  ```sh
+  git tag v1.0.0 <commit-in-production> && git push origin v1.0.0
+  gh release create v1.0.0 --verify-tag --notes "Baseline: what Production ran when the service joined the golden path."
+  # the Artifact must be in ghcr as <image>:<that commit's sha>; then
+  gh workflow run redeliver.yml
+  ```
+
+  Without an Artifact for that commit, skip the re-delivery: the next
+  Releasable merge is the first delivery.
+- **A new service**: tag its first commit `v0.0.0` (no Release needed); the
+  first Releasable merge becomes v0.1.0.
 
 ## Migrating from v3 → v4
 
@@ -437,15 +466,16 @@ Move to v4 directly:
 | `.github/workflows/pull-request.yml` | What a service's pull request runs: `Build` (Dockerfile `test` stage, then every image, loaded locally, then the compose tests (`test-compose`) on them, and handed to Accept as the run artifact `pr-images`, a `docker save` of tens of MB kept 1 day) → `Accept` (image scan, PR title, gitleaks, dependency review through GitHub's dependency-graph compare API — each a step, all run, the failing one named). One summary, from Accept: the four checks, then Build's and the dependency step's notes, collapsed; Build writes it instead when Build fails. Publishes nothing, needs no secrets. |
 | `.github/workflows/ship.yml` | What a merge runs: `Build` (`test` stage, then every image pushed as `:<commit-sha>`, then the compose tests on them by digest) → `Accept` (Trivy over them) → `Deliver` (cut release, then `actions/deliver` on Build's Artifact list, then the summary; in the concurrency group `golden-path-deliver-<owner/repo>`). One summary, from Deliver (from Build when Build fails). `dry-run` for self-test. |
 | `.github/workflows/redeliver.yml` | Re-delivery, by hand (`workflow_dispatch`): one job, `Deliver` — find the latest Release, then `actions/deliver` with no Artifact list (it finds that commit's; nothing rebuilt, none there fails), then the summary; in Ship's concurrency group. A version already recorded changes nothing in homelab-k8s and leaves comments and the `production` deployment as they are. `dry-run` for self-test. |
-| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, recorded in a copy of `fixtures/gitops`, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), `actions/deliver` called directly (job `deliver`: a dry-run delivery with its diff checked, a downgrade failing "at record", a missing Artifact failing "at find"), the recording cases (`record.test.sh`) and a dry-run record of pepic in the real homelab-k8s (no diff expected), the list form of the image actions (two images in one job, one failing; found again by commit), the compose tests (one passing, one failing), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
+| `.github/workflows/self-test.yml` | This repo's PR checks, with the PR's own actions on `fixtures/`: `pull-request.yml` as job `ci`, `ship.yml` as job `ship` (dry-run Release, promotion to a throw-away tag, recorded in a copy of `fixtures/gitops`, report dry run), `redeliver.yml` as job `redeliver` (this repo's latest Release given a fixture Artifact, dry run), `actions/deliver` called directly (job `deliver`: a dry-run delivery with its diff checked, a downgrade failing "at record", a missing Artifact failing "at find"), the recording cases (`record.test.sh`) and a dry-run record of pepic in the real homelab-k8s (no diff expected), the list form of the image actions (two images in one job, one failing; found again by commit), the compose tests (one passing, one failing; an image with no `test` stage noted as tested by them), the Artifact list cases, the no-downgrade and Application annotation cases, actionlint. |
 | `.github/workflows/release.self.yml` | This repo's release on push to main: self-test, then release-please, then the major tag (never `v2`). |
+| `.github/workflows/prune-fixtures.self.yml` | Daily (and by hand): deletes self-test's throw-away ghcr versions of the fixture packages (`hello`, `hello-ship`, `hello-redeliver`, `hello-list`, `hello-worker`, `hello-go-gate`) — older than 7 days, beyond the newest 5, and tagged only `0.0.0-*` (a promotion) or a commit SHA (a Build). Anything else (`buildcache`, a `v` tag) and untagged versions (an index's platform manifests) stay. On a PR that changes it: a dry run, listing what it would delete. |
 | `.github/workflows/release.yml` | release-please, for this repo's own releases (callers on `@v2` read the v2 tag's copy). |
 | `actions/artifact/artifact.sh` | The Artifact list `[{"name", "image", "digest"}]`: its shape, the one name → address mapping, its check (the offending entry named), refs. Sourced by the actions below and the workflows; cases in `artifact.test.sh`. |
-| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one. On PRs loads them locally; on merge pushes `:<commit-sha>`. Reads the ghcr cache `:buildcache`; only a merge writes it (see "How Build caches"). Output `images`: the Artifact list. The first failing image stops it, named. |
+| `actions/build-image` | Build a list of images (`images`: JSON `[{"name", "context", "dockerfile"}]`, one after the other in one step) with buildx for linux/arm64; builds each Dockerfile's `test` stage first when it has one (without one, its note names `test-compose` when given, else "no tests"). On PRs loads them locally; on merge pushes `:<commit-sha>`. Reads the ghcr cache `:buildcache`; only a merge writes it (see "How Build caches"). Output `images`: the Artifact list. The first failing image stops it, named. |
 | `actions/test-compose` | A service's compose tests (`test-compose`): each image of an Artifact list as `IMAGE_<NAME>` (its ref), the compose file's service `test` run with its dependencies, its exit code the result; on a failure the last lines of its output go to the notes (the run's summary). Removes what it started. |
 | `actions/find-artifact` | Re-delivery's Artifact list: for the service's `images` and a commit, the digest each `<image>:<commit-sha>` holds in ghcr; none fails, named. |
 | `actions/scan-image` | Trivy as a pinned container over an Artifact list (build-image's, find-artifact's or promote-image's `images` output as is); scans them all, then fails on the given severity (CRITICAL) with a fix available, naming each failed image. |
-| `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag; tags this commit and creates the GitHub Release only on a Releasable change, as the kindorg-ci App (`client-id`, `private-key`). `dry-run` tags nothing and needs no App. |
+| `actions/cut-release` | git-cliff (`cliff.toml`): next version and notes from the Conventional Commits since the last `vX.Y.Z` tag (none fails: "A service with no Release yet"); tags this commit and creates the GitHub Release only on a Releasable change, as the kindorg-ci App (`client-id`, `private-key`). `dry-run` tags nothing and needs no App. |
 | `actions/deliver` | Delivery of one Release, the module Ship and re-delivery share. In: the Release (`version`, `tag`, `sha`, `release-url`; `ref` for the report, default the tag), the Artifact list (`artifact`; empty: found for `sha` from `images`), `app`, `environment-url`, `trivy-severity`, `dry-run`, `client-id`/`private-key`, `token`. Runs find-artifact (when no list) → promote-image → promoted = given → scan-image → gitops-pr → report-delivery. Out: `outcome` (`recorded`, `already-recorded`, `dry-run`, `failed`), `failed-at` (the part, in words), `images`, `gitops-pr`, `diff`. Its parts are the actions of the ci checkout at `.kindorg-ci`. `dry-run`: a throw-away tag, recorded in a git copy of `fixtures/gitops` (app `hello-dry-run`), the report as a dry run. |
 | `actions/promote-image` | Add the version tag to each `image@digest` of an Artifact list with crane; fails if a digest changed, naming the image. Output `images`: the list as read back, the same as its input. |
 | `actions/record/record.sh` | Recording a Release in homelab-k8s, on a checkout, files only: `record.sh <checkout> <app>` with `VERSION`, `IMAGES` (the Artifact list), `SOURCE_SHA`, `SOURCE_REPO`, `ENVIRONMENT_URL` → no downgrade (`no-downgrade.sh`), each `image@digest` pinned, `app.kubernetes.io/version` label, the Release on the Application (`annotate-app.sh`), then verified: `kustomize build` must render every `image@digest`. Prints the diff (empty: already recorded); pushes nothing. Cases in `record.test.sh`, `no-downgrade.test.sh`, `annotate-app.test.sh`. |

@@ -444,7 +444,8 @@ jobs:
     # (hello-compose, its own name), a test image built FROM it with a
     # Postgres client — one compose file whose test passes, one whose test
     # fails; the failure fails the step and its error reaches the notes the
-    # run's summary is made of. The workflows run it too: `ci` (the image as
+    # run's summary is made of. An image with no `test` stage built with
+    # `test-compose` is noted as tested by it, not as having no tests. The workflows run it too: `ci` (the image as
     # is, loaded) and `ship` (pulled by digest).
     name: "Build: compose tests run against the built image"
     runs-on: ubuntu-24.04-arm
@@ -474,6 +475,12 @@ jobs:
         with:
           compose-file: fixtures/compose/fail.yml
           images: ${{ steps.build.outputs.images }}
+      # an image with no `test` stage whose tests are compose tests: its
+      # note names the compose file, not "has no tests"
+      - uses: ./actions/build-image
+        with:
+          images: '[{"name": "hello-worker", "context": "fixtures/hello-worker", "dockerfile": "fixtures/hello-worker/Dockerfile"}]'
+          test-compose: fixtures/compose/pass.yml
       - name: The failure fails the step, its error in the notes
         env:
           OUTCOME: ${{ steps.fail.outcome }}
@@ -484,6 +491,9 @@ jobs:
           grep -qF "**Compose tests passed** (\`fixtures/compose/pass.yml\`" "$KINDORG_CI_NOTES" || { echo "::error::no pass note"; exit 1; }
           grep -qF "**Compose tests failed** (\`fixtures/compose/fail.yml\`" "$KINDORG_CI_NOTES" || { echo "::error::no failure note"; exit 1; }
           grep -q 'relation "no_such_table" does not exist' "$KINDORG_CI_NOTES" || { echo "::error::the failing test's error is not in the notes"; exit 1; }
+          # shellcheck disable=SC2016 # backticks are the note's markdown
+          grep -qF '**hello-worker:** no `test` stage in `fixtures/hello-worker/Dockerfile`; its tests are the compose tests (`fixtures/compose/pass.yml`)' "$KINDORG_CI_NOTES" || { echo "::error::an image tested by compose was not noted as such"; exit 1; }
+          ! grep -qF 'hello-worker has no tests' "$KINDORG_CI_NOTES" || { echo "::error::an image tested by compose was noted as having no tests"; exit 1; }
           [ -z "$(docker ps -aq --filter label=com.docker.compose.project=kindorg-ci-test)" ] || { echo "::error::containers left behind"; exit 1; }
           echo "pass passes, fail fails with its error in the summary, nothing left running: ok"
 
