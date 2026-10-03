@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.2](https://github.com/kindorg-hq/ci/compare/v4.2.1...v4.2.2) (2026-10-03)
+
+
+### Bug Fixes
+
+* **#74:** scan-of-record self-test passes on a PR that cuts no Release ([#76](https://github.com/kindorg-hq/ci/issues/76)) ([d92c5e8](https://github.com/kindorg-hq/ci/commit/d92c5e83b1611eb2c9a1e2fce9b9ca31f52f82ec))
+
 ## [4.2.1](https://github.com/kindorg-hq/ci/compare/v4.2.0...v4.2.1) (2026-10-03)
 
 
