@@ -288,7 +288,10 @@ jobs:
     # they ran: Ship's (`rescan: false`) runs no Trivy — Accept scanned that
     # digest moments before, promoted = accepted is the evidence — and
     # re-delivery's (rescan on) does, time having passed since its Accept.
-    # Each says so in its log ("re-scanned: …", from actions/deliver).
+    # Each says so in its log ("re-scanned: …", from actions/deliver). A PR
+    # whose commits are all non-Releasable (chore, docs, ci) cuts no dry-run
+    # Release, so Ship's Deliver step is skipped and has nothing to say: its
+    # half is skipped with a note, re-delivery's is still checked.
     name: "Deliver: Ship relies on Accept's scan, re-delivery re-scans"
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: [ship, redeliver]
@@ -304,20 +307,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          jobs=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" --jq '.jobs[]')
+          job() { jq -c --arg n "$1" 'select(.name == $n)' <<< "$jobs"; }
           log() {
             local id
-            id=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
-              --jq ".jobs[] | select(.name == \"$1\") | .id")
+            id=$(job "$1" | jq -r .id)
             [ -n "$id" ] || { echo "::error::no job '$1' in this run"; exit 1; }
             # curl, not gh: gh refuses a body with terminal escapes (log colours)
             curl -fsSL --retry 5 --retry-all-errors -H "Authorization: Bearer $GH_TOKEN" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/jobs/${id}/logs"
           }
-          ship=$(log "ship / Deliver")
           redeliver=$(log "redeliver / Deliver")
-          grep -q "Deliver: dry-run; re-scanned: false" <<< "$ship" || { echo "::error::ship / Deliver did not say 're-scanned: false'"; exit 1; }
-          ! grep -q "aquasec/trivy" <<< "$ship" || { echo "::error::ship / Deliver ran Trivy"; exit 1; }
           grep -q "Deliver: dry-run; re-scanned: true" <<< "$redeliver" || { echo "::error::redeliver / Deliver did not say 're-scanned: true'"; exit 1; }
           grep -q "aquasec/trivy" <<< "$redeliver" || { echo "::error::redeliver / Deliver ran no Trivy"; exit 1; }
+          # Ship's Deliver step ran only if this PR cut a dry-run Release
+          delivered=$(job "ship / Deliver" | jq -r '.steps[] | select(.name | startswith("Deliver the Release")) | .conclusion')
+          if [ "$delivered" = skipped ]; then
+            note="ship / Deliver: no Release to deliver (this PR has no Releasable change), its half not checked"
+            echo "::notice::$note"; echo "$note" >> "$GITHUB_STEP_SUMMARY"
+            echo "redeliver / Deliver: re-scanned: ok"; exit 0
+          fi
+          ship=$(log "ship / Deliver")
+          grep -q "Deliver: dry-run; re-scanned: false" <<< "$ship" || { echo "::error::ship / Deliver did not say 're-scanned: false'"; exit 1; }
+          ! grep -q "aquasec/trivy" <<< "$ship" || { echo "::error::ship / Deliver ran Trivy"; exit 1; }
           echo "ship / Deliver: no Trivy, Accept's scan of record; redeliver / Deliver: re-scanned: ok"
 
   deliver:
