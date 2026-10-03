@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.1](https://github.com/kindorg-hq/ci/compare/v4.2.0...v4.2.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* **#70:** tidy ci after the final review; compose tests count as tests, no Release from a tagless history ([#73](https://github.com/kindorg-hq/ci/issues/73)) ([c737be6](https://github.com/kindorg-hq/ci/commit/c737be6fc9693289f761cee4c10c3810e2098a5b))
+
 ## [4.2.0](https://github.com/kindorg-hq/ci/compare/v4.1.1...v4.2.0) (2026-10-02)
 
 
