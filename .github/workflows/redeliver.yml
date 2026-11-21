@@ -47,7 +47,7 @@
 # in ghcr for the release commit); Delivery itself is one module. One
 # concurrency group with Ship: a re-delivery waits for a Ship's Deliver of the
 # same service, and the other way round. A dry run (self-test) is in a group
-# of its own run instead, as in ship.yml.
+# of its own, per run, instead, as in ship.yml.
 #
 # Runs as the kindorg-ci GitHub App for the GitOps PR: vars.KINDORG_CI_CLIENT_ID
 # (org variable) and secrets.KINDORG_CI_APP_KEY.
@@ -96,8 +96,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # the same group as ship.yml's Deliver: one delivery per service at a
-    # time; a dry run (throw-away tag of its own run) in a group of its own
-    # run; see there
+    # time; a dry run (throw-away tag of its own run) in a group of its own,
+    # per run; see there
     concurrency:
       group: golden-path-deliver-${{ inputs.dry-run && github.run_id || github.repository }}
       cancel-in-progress: false
