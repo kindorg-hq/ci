@@ -588,7 +588,8 @@ jobs:
         uses: ./actions/promote-image
         with:
           images: ${{ steps.find.outputs.images }}
-          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-list
+          # its own per run: two runs of one PR must not retag each other's
+          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}-list
           token: ${{ github.token }}
       - env:
           BUILT: ${{ steps.build.outputs.images }}
@@ -708,10 +709,12 @@ jobs:
           [[ "$built" =~ ^[0-9]+$ ]] || {
             echo "::error::/deps-built-at in the image is not a time: '${built}'"; exit 1; }
           # the only cache build-image reads is the registry one, and this
-          # runner is fresh: compiled before START = taken from that cache
+          # runner is fresh: compiled before START = taken from that cache.
+          # (Left open: a parallel seed compiling after START and exported
+          # before this build imports it would fail here; seconds wide.)
           [ "$built" -lt "$START" ] || {
             echo "::error::the dependencies were compiled at ${built}, in this job (started at ${START}), not taken from the cache the merge wrote"; exit 1; }
-          from="the cache this run's merge stand-in wrote"
-          [ "$built" = "$SEEDED" ] || from="the cache a parallel run's merge stand-in wrote (this run's compiled at ${SEEDED})"
-          echo "**Build cache:** with new code, build-image (test stage + image) took ${took}s; the dependencies (compiled at ${built}, before this job started) came from ${from}." >> "$GITHUB_STEP_SUMMARY"
-          echo "dependencies reused from ${from}, compiled at ${built} < ${START}: ok (${took}s)"
+          seed="the same second as this run's merge stand-in"
+          [ "$built" = "$SEEDED" ] || seed="this run's merge stand-in compiled at ${SEEDED:-?}: a parallel run's seed, written since"
+          echo "**Build cache:** with new code, build-image (test stage + image) took ${took}s; the dependencies came from the merge-written cache (compiled at ${built}, before this job started; ${seed})." >> "$GITHUB_STEP_SUMMARY"
+          echo "dependencies reused from the merge-written cache, compiled at ${built} < ${START} (${seed}): ok (${took}s)"

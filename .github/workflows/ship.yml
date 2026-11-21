@@ -46,7 +46,8 @@
 # Deliveries of one service never overtake each other: Deliver, from cutting
 # the Release to recording it, runs one at a time per service repo (its
 # concurrency group, shared with re-delivery), and the GitOps PR refuses a
-# version lower than the recorded one.
+# version lower than the recorded one. A dry run (self-test) is in a group of
+# its own run instead: see the Deliver job.
 #
 # Re-delivery (redeliver.yml) runs the same Delivery (actions/deliver), with
 # "find the latest Release" in place of "cut release" and, nothing being
@@ -211,9 +212,12 @@ jobs:
     # and drops older pending ones; the next Release includes their commits.
     # The same group as re-delivery: they queue here. The name is v3's (its
     # golden-path.yml used it), so a service's last v3 run and first v4 one
-    # queue too. A dry run (self-test) delivers nothing, so it queues behind
-    # nothing: its own group per run — parallel pull requests' self-tests
-    # would otherwise queue, and all but the last pending one be dropped.
+    # queue too. A dry run (self-test) touches no Release, homelab-k8s or
+    # PR; it only pushes a throw-away tag of its own run
+    # (0.0.0-dry-run-<PR>-<run id>, actions/deliver) and records in a copy of
+    # fixtures/gitops on the runner. So it waits for nothing: a group of its
+    # own run. In the repo-wide group, parallel pull requests' self-tests
+    # queued and GitHub dropped all but one pending (checks cancelled).
     concurrency:
       group: golden-path-deliver-${{ inputs.dry-run && github.run_id || github.repository }}
       cancel-in-progress: false

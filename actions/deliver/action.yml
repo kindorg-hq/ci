@@ -10,7 +10,8 @@ description: >
   ended (`outcome`), for delivery-summary. Its parts are the actions of the
   kindorg-hq/ci checkout at .kindorg-ci in the workspace (the workflows
   check it out there); their notes go to the file KINDORG_CI_NOTES names. A
-  dry run tags nothing real (a throw-away tag), records in a git copy of
+  dry run tags nothing real (a throw-away tag, `0.0.0-dry-run-<PR>-<run id>`:
+  its own per run, so two runs of one PR never retag each other's), records in a git copy of
   fixtures/gitops instead of homelab-k8s (app hello-dry-run) and writes
   nothing on PRs.
 inputs:
@@ -109,7 +110,7 @@ runs:
       uses: ./.kindorg-ci/actions/promote-image
       with:
         images: ${{ inputs.artifact || steps.find.outputs.images }}
-        to-tag: ${{ inputs.dry-run == 'true' && format('0.0.0-dry-run-{0}', github.event.pull_request.number || github.run_id) || inputs.version }}
+        to-tag: ${{ inputs.dry-run == 'true' && format('0.0.0-dry-run-{0}-{1}', github.event.pull_request.number || 0, github.run_id) || inputs.version }}
         token: ${{ inputs.token }}
 
     # what is delivered is what was accepted, byte for byte: two Artifact
