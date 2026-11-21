@@ -588,7 +588,8 @@ jobs:
         uses: ./actions/promote-image
         with:
           images: ${{ steps.find.outputs.images }}
-          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-list
+          # its own per run: two runs of one PR must not retag each other's
+          to-tag: 0.0.0-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}-list
           token: ${{ github.token }}
       - env:
           BUILT: ${{ steps.build.outputs.images }}
@@ -674,7 +675,9 @@ jobs:
     # The Build cache, part 2 — the next pull request, on a fresh runner with
     # no packages permission, changes the code and builds with build-image:
     # the dependencies (fixtures/hello-go's `src` stage) must come from the
-    # cache part 1 wrote (the same /deps-built-at), not compiled again here.
+    # merge-written cache, not compiled again here — their /deps-built-at is
+    # before this job started. Before, not equal to part 1's: the cache tag is
+    # shared, and a parallel pull request's part 1 may have written it since.
     name: "Build: a pull request reuses what the merge built"
     needs: build-cache-merge
     runs-on: ubuntu-24.04-arm
@@ -703,7 +706,15 @@ jobs:
           set -euo pipefail
           took=$(( $(date +%s) - START ))
           built=$(docker run --rm --entrypoint cat "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/hello-go" /deps-built-at)
-          [ "$built" = "$SEEDED" ] || {
-            echo "::error::the dependencies were compiled at ${built}, not taken from the cache the merge wrote (compiled at ${SEEDED})"; exit 1; }
-          echo "**Build cache:** with new code, build-image (test stage + image) took ${took}s; the dependencies came from the cache the merge wrote." >> "$GITHUB_STEP_SUMMARY"
-          echo "dependencies reused from the cache the merge wrote: ok (${took}s)"
+          [[ "$built" =~ ^[0-9]+$ ]] || {
+            echo "::error::/deps-built-at in the image is not a time: '${built}'"; exit 1; }
+          # the only cache build-image reads is the registry one, and this
+          # runner is fresh: compiled before START = taken from that cache.
+          # (Left open: a parallel seed compiling after START and exported
+          # before this build imports it would fail here; seconds wide.)
+          [ "$built" -lt "$START" ] || {
+            echo "::error::the dependencies were compiled at ${built}, in this job (started at ${START}), not taken from the cache the merge wrote"; exit 1; }
+          seed="the same second as this run's merge stand-in"
+          [ "$built" = "$SEEDED" ] || seed="this run's merge stand-in compiled at ${SEEDED:-?}: a parallel run's seed, written since"
+          echo "**Build cache:** with new code, build-image (test stage + image) took ${took}s; the dependencies came from the merge-written cache (compiled at ${built}, before this job started; ${seed})." >> "$GITHUB_STEP_SUMMARY"
+          echo "dependencies reused from the merge-written cache, compiled at ${built} < ${START} (${seed}): ok (${took}s)"
