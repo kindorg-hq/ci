@@ -95,9 +95,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # the same group as ship.yml's Deliver: one delivery per service at a
-    # time; see there
+    # time; a dry run its own group per run; see there
     concurrency:
-      group: golden-path-deliver-${{ github.repository }}
+      group: golden-path-deliver-${{ inputs.dry-run && github.run_id || github.repository }}
       cancel-in-progress: false
     permissions:
       contents: read

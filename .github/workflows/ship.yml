@@ -211,9 +211,11 @@ jobs:
     # and drops older pending ones; the next Release includes their commits.
     # The same group as re-delivery: they queue here. The name is v3's (its
     # golden-path.yml used it), so a service's last v3 run and first v4 one
-    # queue too.
+    # queue too. A dry run (self-test) delivers nothing, so it queues behind
+    # nothing: its own group per run — parallel pull requests' self-tests
+    # would otherwise queue, and all but the last pending one be dropped.
     concurrency:
-      group: golden-path-deliver-${{ github.repository }}
+      group: golden-path-deliver-${{ inputs.dry-run && github.run_id || github.repository }}
       cancel-in-progress: false
     permissions:
       contents: read

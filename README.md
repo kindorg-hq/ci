@@ -483,7 +483,7 @@ Move to v4 directly:
 | `actions/report-delivery` | `released` label and one "recorded" comment on every PR of the Release; `production` deployment of the release commit, `in_progress`. |
 | `actions/delivery-summary` | The one summary of a Ship or re-deliver run, from deliver's `outcome`: version, commit, digests, Release, GitOps PR, what comes next; the failing step, or deliver's `failed-at`, when one failed. The workflows set `KINDORG_CI_NOTES` to a file, and build-image, cut-release, find-artifact, promote-image, gitops-pr and report-delivery write their notes there instead of their own step summaries; this action folds them in, collapsed. Unset, they write step summaries. |
 | `fixtures/hello` | The smallest service (with a `test` stage) that self-test runs the workflows on. |
-| `fixtures/hello-go` | A Go service laid out for the Build cache (dependencies compiled in their own layer): self-test writes its ghcr cache as a merge would, then builds changed code as a PR and checks the dependencies were not compiled again. |
+| `fixtures/hello-go` | A Go service laid out for the Build cache (dependencies compiled in their own layer): self-test writes its ghcr cache as a merge would, then builds changed code as a PR and checks the dependencies were not compiled again (compiled before that job started: the cache tag is shared, so a parallel PR's run may have written it). |
 | `fixtures/hello-worker`, `fixtures/broken` | A second image without a `test` stage, and one whose tests fail: the list form of the image actions in self-test. |
 | `fixtures/compose` | Compose tests with Postgres for self-test: `hello.yml` and `hello-ship.yml` (the `ci` and `ship` jobs' images as is), `pass.yml` and `fail.yml` (a test image built `FROM` the image under test; one passes, one fails with its error in the summary). |
 | `fixtures/gitops` | A homelab-k8s stand-in (hello records 1.4.0; fresh, two images, nothing yet) for the recording cases. |
@@ -533,7 +533,8 @@ Move to v4 directly:
     `golden-path-deliver-<owner/repo>`, without cancel-in-progress; Ship's and re-delivery's share it (and v3's
     used the same name). GitHub keeps one pending run per group and drops
     older pending ones; that is accepted — the next Release includes their
-    commits.
+    commits. A dry run (`dry-run: true`, self-test) delivers nothing and
+    gets a group of its own run, so parallel self-tests never queue.
   - *No downgrade.* The GitOps PR (`actions/gitops-pr`) reads the
     `app.kubernetes.io/version` already recorded for the app in homelab-k8s
     and refuses a lower one, naming both versions. Equal is allowed
