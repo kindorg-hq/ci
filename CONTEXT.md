@@ -26,7 +26,7 @@ A version given to an accepted commit of main: a tag vX.Y.Z on that very commit 
 _Avoid_: deploy (that is Delivery), build
 
 **Releasable change**:
-A commit whose type is `feat`, `fix` or `perf`, or that is breaking. Only these become a Release; a merge of `chore`, `docs`, `ci` or `test` is built and accepted but ships nothing. Runtime dependency and base-image bumps are `fix(deps)`, so they ship: they change what runs.
+A commit whose type is `feat`, `fix` or `perf`, or that is breaking. Only these become a Release; a merge of `chore`, `docs`, `ci` or `test` is built and accepted but ships nothing. Runtime dependency and base-image bumps are `fix(deps)`, so they ship: they change what runs. A dependency the image installs is runtime, whatever its package-manager group.
 _Avoid_: release-worthy, user-facing change
 
 **Delivery**:

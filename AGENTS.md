@@ -34,8 +34,9 @@ Production.** What ships:
   Release on merge and is delivered. Anything else (`chore`, `docs`, `ci`,
   `test`, `refactor`) ships with the next Release.
 - Runtime dependency and base-image bumps are `fix(deps)`, so they ship:
-  they change what runs. Actions bumps are `chore(deps)`. Dependabot's
-  `commit-message.prefix` says which.
+  they change what runs. A dependency the image installs is runtime,
+  whatever its group (no `prefix-development` then). Actions bumps are
+  `chore(deps)`. Dependabot's `commit-message.prefix` says which.
 
 ## Reading a run
 
