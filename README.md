@@ -242,7 +242,13 @@ Before the first merge:
     dependencies added (skipped on private repos).
 
 Dependabot PRs (label `dependencies`) skip the title check, and get no
-secrets, which the pull request does not need.
+secrets, which the pull request does not need. Their
+`commit-message.prefix`: runtime dependencies (Go modules, npm, …) and the
+Docker base image `fix(deps)`, so they ship (they change what runs); GitHub
+Actions `chore(deps)`. A dependency the shipped image carries (its last
+stage: installed there or copied in) is runtime whatever its group, so no
+`prefix-development` for it; one only the `test` stage uses is not
+(`prefix-development: "chore(deps)"`).
 
 ### Tests that need a database
 
@@ -449,10 +455,9 @@ Move to v4 directly:
    release-please's tags included.
 5. **Freeze `CHANGELOG.md`**: leave it as it is and end it with a line that
    later releases are in GitHub Releases.
-6. **Dependabot**: runtime dependencies (Go modules, npm, …, any group the
-   image installs, so no `prefix-development`) and the Docker base image with
-   `commit-message: {prefix: "fix(deps)"}` so they ship (they change what
-   runs); GitHub Actions `chore(deps)`.
+6. **Dependabot**: `commit-message.prefix` as in "Connect a service":
+   runtime dependencies and the Docker base image `fix(deps)`, GitHub Actions
+   `chore(deps)`.
 7. **Ruleset**: replace the v2 names (`pull-request / …`, `checks / …`, the
    test workflow's) with `ci / Build` and `ci / Accept`.
 8. **First delivery**: `gh workflow run redeliver.yml` re-delivers the latest
