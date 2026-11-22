@@ -449,9 +449,9 @@ Move to v4 directly:
    release-please's tags included.
 5. **Freeze `CHANGELOG.md`**: leave it as it is and end it with a line that
    later releases are in GitHub Releases.
-6. **Dependabot**: runtime dependencies (Go modules, npm, …) with
-   `commit-message: {prefix: "fix(deps)"}` so they ship; GitHub Actions and
-   the Docker base image `chore(deps)`.
+6. **Dependabot**: runtime dependencies (Go modules, npm, …) and the Docker
+   base image with `commit-message: {prefix: "fix(deps)"}` so they ship (they
+   change what runs); GitHub Actions `chore(deps)`.
 7. **Ruleset**: replace the v2 names (`pull-request / …`, `checks / …`, the
    test workflow's) with `ci / Build` and `ci / Accept`.
 8. **First delivery**: `gh workflow run redeliver.yml` re-delivers the latest

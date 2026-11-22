@@ -33,9 +33,9 @@ Production.** What ships:
 - A **Releasable change** — `feat`, `fix`, `perf` or breaking — becomes a
   Release on merge and is delivered. Anything else (`chore`, `docs`, `ci`,
   `test`, `refactor`) ships with the next Release.
-- Runtime dependency bumps are `fix(deps)`, so they ship; Actions and
-  base-image bumps are `chore(deps)`. Dependabot's `commit-message.prefix`
-  says which.
+- Runtime dependency and base-image bumps are `fix(deps)`, so they ship:
+  they change what runs. Actions bumps are `chore(deps)`. Dependabot's
+  `commit-message.prefix` says which.
 
 ## Reading a run
 
