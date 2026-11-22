@@ -199,10 +199,11 @@ jobs:
   pr-title:
     # The PR title check of pull-request.yml (step `title`), its inputs as the
     # workflow has them, run through the action it pins, title by title: the
-    # scope ends at the first parenthesis, as git-cliff reads it, so a subject
-    # containing "fix(deps): " passes; no work item, a non-issue scope or two
-    # scopes fail; labelled dependency and release PRs are let through.
-    # Cases in pull-request.title.test.sh.
+    # scope ends at the first parenthesis, so a subject containing
+    # "fix(deps): " passes; no work item, a non-issue, empty or doubled scope
+    # fails; labelled dependency and release PRs are let through. Each title
+    # that passes is read by git-cliff as cut-release runs it, to the same
+    # scope and subject. Cases and known limits in pull-request.title.test.sh.
     name: "Accept: the PR title check reads the scope as git-cliff does"
     runs-on: ubuntu-24.04
     timeout-minutes: 10

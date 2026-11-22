@@ -2,35 +2,45 @@
 # Cases for the PR title check of pull-request.yml (Accept, step `title`): the
 # step's own inputs, read from the workflow, run through the action it pins,
 # one title at a time, against a stand-in for the GitHub API that serves the
-# title. A title that passes must have the scope git-cliff (cut-release)
-# reads: up to the first parenthesis. Runs in self-test and locally (needs
-# docker and git):
+# title. Every title that passes is then read by git-cliff as cut-release runs
+# it (its image, cliff.toml): the same scope and subject, or the case fails.
+# Runs in self-test and locally (needs docker and git):
 #   .github/workflows/pull-request.title.test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/../.." && pwd)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+label="kindorg-ci.title-test=$$"
+trap 'docker ps -aq --filter "label=$label" | xargs -r docker rm -f > /dev/null; rm -rf "$work"' EXIT
 YQ=mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
-NODE=node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+# the runtime the action declares (runs.using) → the image it runs in here
+NODE24=node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+yq() { docker run --rm -i --network none "$YQ" "$@"; }
 failed=0
 
 # the step as the workflow has it: {uses, with}
-step=$(docker run --rm -i "$YQ" -o=json -I=0 \
-  '.jobs.accept.steps[] | select(.id == "title") | {"uses": .uses, "with": .with}' \
+step=$(yq -o=json -I=0 '.jobs.accept.steps[] | select(.id == "title") | {"uses": .uses, "with": .with}' \
   < "$here/pull-request.yml") && [ -n "$step" ] || { echo "FAIL no step with id title in pull-request.yml"; exit 1; }
-uses=$(docker run --rm -i "$YQ" -p=json '.uses' <<< "$step")
+uses=$(yq -p=json '.uses' <<< "$step")
 repo=${uses%@*} sha=${uses#*@}
 git init -q "$work/action"
 if ! git -C "$work/action" fetch -q --depth 1 "https://github.com/$repo" "$sha" ||
   ! git -C "$work/action" checkout -q FETCH_HEAD; then echo "FAIL cannot fetch $uses"; exit 1; fi
+using=$(yq '.runs.using' < "$work/action/action.yml")
+main=$(yq '.runs.main' < "$work/action/action.yml")
+case $using in
+  node24) node=$NODE24 ;;
+  *) echo "FAIL $uses runs on '$using': pin a node image for it in this test"; exit 1 ;;
+esac
+[ -f "$work/action/$main" ] || { echo "FAIL $uses: runs.main '$main' not found"; exit 1; }
 
 # One run of the action, as the runner runs it: inputs as INPUT_*, the event
-# payload, the API at githubBaseUrl. Last line: RESULT, pass, scope, error's
-# first line, separated by \x1f (empty fields kept).
+# payload, the API at githubBaseUrl. Last line: RESULT, pass, scope, subject,
+# error's first line, separated by \x1f (empty fields kept).
 cat > "$work/run.mjs" <<'EOF'
 import fs from 'node:fs';
 import http from 'node:http';
-const [title, labels, requireIssue, step] = process.argv.slice(2);
+const [main, title, labels, requireIssue, step] = process.argv.slice(2);
 // the two expressions the step's inputs use; any other is the test's to learn
 const evaluate = (v) => String(v).replace(/\$\{\{(.*?)\}\}/g, (_, e) => {
   e = e.trim();
@@ -47,6 +57,7 @@ const server = http.createServer((req, res) => {
   server.close();
 });
 await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+server.unref(); // an action that fails before it asks for the PR still exits
 const api = `http://127.0.0.1:${server.address().port}`;
 const tmp = fs.mkdtempSync('/tmp/title-');
 fs.writeFileSync(`${tmp}/event.json`, JSON.stringify({ pull_request:
@@ -63,24 +74,28 @@ process.on('exit', (code) => {
     out[m[1]] = m[3];
   const field = (v) => (v ?? '').split('\n')[0].replace(/\x1f/g, ' ');
   console.log(['RESULT', code === 0 && !process.exitCode, field(out.scope),
-    field(out.error_message)].join('\x1f'));
+    field(out.subject), field(out.error_message)].join('\x1f'));
   process.exitCode = 0;
 });
-await import('/action/dist/index.js');
+await import(`/action/${main}`);
 EOF
 
+read_by_cliff=() # "title | scope | subject" of each title that passed, for git-cliff
 check() { # check pass <scope>|fail <wanted words> <title> [require-issue] [labels]
-  local want=$1 what=$2 title=$3 require=${4:-true} labels=${5:-} out pass scope error
-  out=$(timeout 60 docker run --rm -u "$(id -u):$(id -g)" -v "$work/run.mjs:/run.mjs:ro" \
-    -v "$work/action:/action:ro" "$NODE" node /run.mjs "$title" "$labels" "$require" "$step" 2>&1)
-  IFS=$'\x1f' read -r _ pass scope error < <(grep '^RESULT' <<< "$out" | tail -1)
+  local want=$1 what=$2 title=$3 require=${4:-true} labels=${5:-} out pass scope subject error
+  out=$(timeout 60 docker run --rm --init --network none --label "$label" -u "$(id -u):$(id -g)" \
+    -v "$work/run.mjs:/run.mjs:ro" -v "$work/action:/action:ro" \
+    "$node" node /run.mjs "$main" "$title" "$labels" "$require" "$step" 2>&1)
+  IFS=$'\x1f' read -r _ pass scope subject error < <(grep '^RESULT' <<< "$out" | tail -1)
   local where="\"$title\" (require-issue $require${labels:+, label $labels})"
   if [ "$want" = pass ] && [ "$pass" = true ] && [ "$scope" = "$what" ]; then
     echo "ok   pass  $where: scope $scope"
+    # let through by label: not parsed, nothing to compare
+    [ -n "$labels" ] || [ "${CLIFF:-yes}" = no ] || read_by_cliff+=("$title | $scope | $subject")
   elif [ "$want" = fail ] && [ "$pass" = false ] && [[ $error == *"$what"* ]]; then
     echo "ok   fail  $where: $what"
   else
-    echo "FAIL want $want ($what), got pass=$pass scope=\"$scope\": $where"
+    echo "FAIL want $want ($what), got pass=${pass:-none} scope=\"$scope\": $where"
     echo "$out" | sed 's/^/     /'
     failed=1
   fi
@@ -91,20 +106,19 @@ check pass '#95' 'docs(#95): base-image bumps are fix(deps): they change what ru
 check pass '#95' 'docs(#95): a fix(deps): b'
 check pass '#12' 'feat(#12): a (small) thing'
 check pass '#7'  'fix(#7)!: breaking, with ! after the scope'
+check pass '#7'  'feat(#7)!: drop fix(deps): y'
 check pass '#7'  'fix(#7): x'
-# known limit: the action's breaking pattern (no input sets it) is tried
-# first and still runs to the last ")!: ", so such a subject fails
-check fail 'Unknown scope "#7): a fix(deps"' 'fix(#7): a fix(deps)!: b'
 
 # the work item is required
-check fail 'No scope found'        'fix: x'
-check fail 'Unknown scope "deps"'  'fix(deps): x'
-check fail 'No scope found'        'fix(): x'
-check fail 'No release type found' 'feat(#1)(#2): x'
-check fail 'No release type found' 'fix((#7)): x'
-check fail 'No release type found' 'fix(#7) x'
-check fail 'No release type found' 'fix(#7):x'
-check fail 'Unknown release type'  'feature(#7): x'
+check fail 'No scope found'                   'fix: x'
+check fail 'Unknown scope "deps"'             'fix(deps): x'
+check fail 'No release type found'            'fix(): x'
+check fail 'No release type found'            'feat(#1)(#2): x'
+check fail 'Unknown scope "#1)(#2"'           'feat(#1)(#2)!: x'
+check fail 'No release type found'            'fix((#7)): x'
+check fail 'No release type found'            'fix(#7) x'
+check fail 'No release type found'            'fix(#7):x'
+check fail 'Unknown release type'             'feature(#7): x'
 
 # Dependabot's and release-please's PRs are let through by label, unread
 check pass '' 'chore(deps): Bump a from 1 to 2' true dependencies
@@ -113,6 +127,39 @@ check pass '' 'chore(main): release 4.2.0' true 'autorelease: pending'
 # require-issue: false
 check pass 'deps' 'fix(deps): x' false
 check pass ''     'chore: x' false
-check fail 'No release type found' 'feat(#1)(#2): x' false
+check fail 'No release type found'            'fix(): x' false
+check fail 'No release type found'            'feat(#1)(#2): x' false
+check fail 'Disallowed scope was found: #1)(#2' 'feat(#1)(#2)!: x' false
+
+# Known limits: the action tries the preset's breakingHeaderPattern first,
+# /^(\w*)(?:\((.*)\))?!: (.*)$/, and no input sets it. Its scope runs to the
+# last ")!: ", so a subject containing ")!: " fails (a valid title refused);
+# and it allows an empty scope, so "feat()!: x" passes when no issue is
+# required, though git-cliff cannot parse it and leaves it out of the notes.
+check fail 'Unknown scope "#7): a fix(deps"'           'fix(#7): a fix(deps)!: b'
+check fail 'Disallowed scope was found: #7): a fix(deps' 'fix(#7): a fix(deps)!: b' false
+CLIFF=no check pass '' 'feat()!: x' false
+
+# Each title that passed, read by git-cliff as cut-release reads it: the
+# same scope and subject (a title it cannot parse is missing from its notes)
+cliff_image=$(yq '.runs.steps[].env.GIT_CLIFF | select(.)' < "$root/actions/cut-release/action.yml")
+[ -n "$cliff_image" ] || { echo "FAIL no GIT_CLIFF image in actions/cut-release/action.yml"; exit 1; }
+git init -q "$work/cliff"
+commit() { git -C "$work/cliff" -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m "$1"; }
+commit "chore: base" && git -C "$work/cliff" tag v0.0.0
+for line in "${read_by_cliff[@]}"; do commit "${line%% | *}"; done
+read_lines=$(docker run --rm --network none --label "$label" -u "$(id -u):$(id -g)" --entrypoint git-cliff \
+  -v "$work/cliff:/app" -v "$root/actions/cut-release/cliff.toml:/cliff.toml:ro" -w /app \
+  "$cliff_image" --config /cliff.toml --unreleased --context 2>/dev/null |
+  yq -p=json '.[0].commits[] | (.raw_message | split("\n") | .[0]) + " | " + (.scope // "") + " | " + .message')
+for line in "${read_by_cliff[@]}"; do
+  if grep -qxF -- "$line" <<< "$read_lines"; then
+    echo "ok   git-cliff reads \"${line%% | *}\" the same: ${line#* | }"
+  else
+    echo "FAIL git-cliff reads \"${line%% | *}\" otherwise: want \"${line#* | }\", git-cliff read:"
+    grep -F -- "${line%% | *} | " <<< "$read_lines" | sed 's/^/     /'
+    failed=1
+  fi
+done
 
 exit $failed

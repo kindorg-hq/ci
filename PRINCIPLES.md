@@ -146,5 +146,7 @@ Release only adds a version tag to the same digest (checked unchanged) and
 homelab-k8s pins it by digest. Never rebuild after merge. Release only a
 Releasable change on an accepted commit. Steps are containers and scripts with
 their own tests (`record.test.sh`, `no-downgrade.test.sh`,
-`annotate-app.test.sh`, `pull-request.title.test.sh`), so they run
-outside Actions.
+`annotate-app.test.sh`, `artifact.test.sh`), so they run
+outside Actions. A pinned third-party action is tested the same way where
+its configuration decides a Check: `pull-request.title.test.sh` runs the
+title check's inputs through it, and git-cliff on what it lets through.
