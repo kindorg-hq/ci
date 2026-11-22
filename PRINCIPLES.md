@@ -146,5 +146,5 @@ Release only adds a version tag to the same digest (checked unchanged) and
 homelab-k8s pins it by digest. Never rebuild after merge. Release only a
 Releasable change on an accepted commit. Steps are containers and scripts with
 their own tests (`record.test.sh`, `no-downgrade.test.sh`,
-`annotate-app.test.sh`), so they run
+`annotate-app.test.sh`, `pull-request.title.test.sh`), so they run
 outside Actions.

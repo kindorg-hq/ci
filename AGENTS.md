@@ -118,7 +118,8 @@ latest Release (job `redeliver`), `actions/deliver` directly (job
 `deliver`: delivered, refused at record, failing at find), the list form of the image actions, the Artifact list, the
 recording cases (`actions/record`: no-downgrade, Application annotations,
 the rendered manifests verified), a dry-run record of pepic in the real
-homelab-k8s (no diff, nothing pushed), and actionlint. Show new
+homelab-k8s (no diff, nothing pushed), the PR title cases
+(`pull-request.title.test.sh`), and actionlint. Show new
 behaviour there as a dry run when it would otherwise write somewhere.
 
 - **One job per Stage**, named `Build`, `Accept` or `Deliver`; details are

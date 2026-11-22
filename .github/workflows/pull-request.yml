@@ -189,6 +189,9 @@ jobs:
       # it, and the scope (#N) traces the change to its work item in the
       # Release notes. Dependency PRs (Dependabot) and this repo's release PRs
       # (release-please) carry their own scopes and are let through by label.
+      # The scope ends at the first parenthesis, as git-cliff reads it (the
+      # action's default runs to the last "): ", so a subject containing
+      # "fix(deps): " failed). Cases: pull-request.title.test.sh.
       - id: title
         name: PR title names its change and work item
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -198,6 +201,8 @@ jobs:
         with:
           requireScope: ${{ inputs.require-issue }}
           scopes: ${{ inputs.require-issue && '#\d+' || '' }}
+          headerPattern: '^(\w*)(?:\(([^()]*)\))?!?: (.*)$'
+          headerPatternCorrespondence: type, scope, subject
           ignoreLabels: |
             autorelease: pending
             dependencies
