@@ -206,7 +206,8 @@ The workflow is named `re-deliver`; `gh workflow run` takes its file:
 inputs: `test-compose` (pull request and ship; see "Tests that need a
 database" below), `runner` (default `ubuntu-24.04-arm`; pull request and ship),
 `trivy-severity` (`CRITICAL`), `require-issue` (pull request; `true`: the PR
-title's scope must be `#N`), `ci-ref` (`v4`). Each entry of `images` may set
+title's scope must be `#N`; `false` also lets `type()!: …` through, which
+git-cliff leaves out of the notes), `ci-ref` (`v4`). Each entry of `images` may set
 `context` and `dockerfile`.
 
 Before the first merge:

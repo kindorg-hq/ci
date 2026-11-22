@@ -193,7 +193,8 @@ jobs:
       # reads it (the action's default runs to the last "): ", so a subject
       # containing "fix(deps): " failed). Its breaking pattern, which no input
       # sets, still runs to the last ")!: ": a scope with a parenthesis in it
-      # is refused. Cases: pull-request.title.test.sh.
+      # is refused. It also takes an empty scope: "feat()!: x" passes when
+      # require-issue is false. Cases: pull-request.title.test.sh.
       - id: title
         name: PR title names its change and work item
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}

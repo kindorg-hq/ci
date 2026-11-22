@@ -10,7 +10,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 work=$(mktemp -d)
-label="kindorg-ci.title-test=$$"
+label="kindorg-ci.title-test=$(basename "$work")" # unique per run, not per PID namespace
 trap 'docker ps -aq --filter "label=$label" | xargs -r docker rm -f > /dev/null; rm -rf "$work"' EXIT
 YQ=mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
 # the runtime the action declares (runs.using) → the image it runs in here
@@ -80,7 +80,7 @@ process.on('exit', (code) => {
 await import(`/action/${main}`);
 EOF
 
-read_by_cliff=() # "title | scope | subject" of each title that passed, for git-cliff
+read_by_cliff=() # title, scope, subject (\x1f between) of each title that passed, for git-cliff
 check() { # check pass <scope>|fail <wanted words> <title> [require-issue] [labels]
   local want=$1 what=$2 title=$3 require=${4:-true} labels=${5:-} out pass scope subject error
   out=$(timeout 60 docker run --rm --init --network none --label "$label" -u "$(id -u):$(id -g)" \
@@ -91,7 +91,7 @@ check() { # check pass <scope>|fail <wanted words> <title> [require-issue] [labe
   if [ "$want" = pass ] && [ "$pass" = true ] && [ "$scope" = "$what" ]; then
     echo "ok   pass  $where: scope $scope"
     # let through by label: not parsed, nothing to compare
-    [ -n "$labels" ] || [ "${CLIFF:-yes}" = no ] || read_by_cliff+=("$title | $scope | $subject")
+    [ -n "$labels" ] || [ "${CLIFF:-yes}" = no ] || read_by_cliff+=("$title"$'\x1f'"$scope"$'\x1f'"$subject")
   elif [ "$want" = fail ] && [ "$pass" = false ] && [[ $error == *"$what"* ]]; then
     echo "ok   fail  $where: $what"
   else
@@ -108,6 +108,7 @@ check pass '#12' 'feat(#12): a (small) thing'
 check pass '#7'  'fix(#7)!: breaking, with ! after the scope'
 check pass '#7'  'feat(#7)!: drop fix(deps): y'
 check pass '#7'  'fix(#7): x'
+check pass '#7'  'fix(#7): a | b'
 
 # the work item is required
 check fail 'No scope found'                   'fix: x'
@@ -119,6 +120,7 @@ check fail 'No release type found'            'fix((#7)): x'
 check fail 'No release type found'            'fix(#7) x'
 check fail 'No release type found'            'fix(#7):x'
 check fail 'Unknown release type'             'feature(#7): x'
+check fail 'No scope found'                   'feat()!: x'
 
 # Dependabot's and release-please's PRs are let through by label, unread
 check pass '' 'chore(deps): Bump a from 1 to 2' true dependencies
@@ -144,20 +146,33 @@ CLIFF=no check pass '' 'feat()!: x' false
 # same scope and subject (a title it cannot parse is missing from its notes)
 cliff_image=$(yq '.runs.steps[].env.GIT_CLIFF | select(.)' < "$root/actions/cut-release/action.yml")
 [ -n "$cliff_image" ] || { echo "FAIL no GIT_CLIFF image in actions/cut-release/action.yml"; exit 1; }
-git init -q "$work/cliff"
-commit() { git -C "$work/cliff" -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m "$1"; }
-commit "chore: base" && git -C "$work/cliff" tag v0.0.0
-for line in "${read_by_cliff[@]}"; do commit "${line%% | *}"; done
-read_lines=$(docker run --rm --network none --label "$label" -u "$(id -u):$(id -g)" --entrypoint git-cliff \
+# the temporary repo ignores the developer's git config (signing, hooks)
+cgit() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$work/cliff" \
+  -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
+commit() { cgit commit -q --no-verify --allow-empty -m "$1" || { echo "FAIL cannot commit \"$1\" for git-cliff"; exit 1; }; }
+if ! mkdir "$work/cliff" || ! cgit init -q; then echo "FAIL cannot make the repo for git-cliff"; exit 1; fi
+commit "chore: base"
+cgit tag v0.0.0 || { echo "FAIL cannot tag the base for git-cliff"; exit 1; }
+for entry in "${read_by_cliff[@]}"; do commit "${entry%%$'\x1f'*}"; done
+if ! context=$(docker run --rm --network none --label "$label" -u "$(id -u):$(id -g)" --entrypoint git-cliff \
   -v "$work/cliff:/app" -v "$root/actions/cut-release/cliff.toml:/cliff.toml:ro" -w /app \
-  "$cliff_image" --config /cliff.toml --unreleased --context 2>/dev/null |
-  yq -p=json '.[0].commits[] | (.raw_message | split("\n") | .[0]) + " | " + (.scope // "") + " | " + .message')
-for line in "${read_by_cliff[@]}"; do
-  if grep -qxF -- "$line" <<< "$read_lines"; then
-    echo "ok   git-cliff reads \"${line%% | *}\" the same: ${line#* | }"
+  "$cliff_image" --config /cliff.toml --unreleased --context 2> "$work/cliff.err"); then
+  echo "FAIL git-cliff failed:"; sed 's/^/     /' "$work/cliff.err"; exit 1
+fi
+# per commit three lines: title, scope, subject
+declare -A read_as=()
+while IFS= read -r t && IFS= read -r sc && IFS= read -r sub; do
+  read_as[$t]="$sc"$'\x1f'"$sub"
+done < <(yq -p=json '.[0].commits[] | [(.raw_message | split("\n") | .[0]), (.scope // ""), (.message | split("\n") | .[0])] | .[]' <<< "$context")
+for entry in "${read_by_cliff[@]}"; do
+  IFS=$'\x1f' read -r t sc sub <<< "$entry"
+  if [ "${read_as[$t]+set}" != set ]; then
+    echo "FAIL git-cliff leaves \"$t\" out: it cannot parse it"; failed=1
+  elif [ "${read_as[$t]}" = "$sc"$'\x1f'"$sub" ]; then
+    echo "ok   git-cliff reads \"$t\" the same: scope \"$sc\", subject \"$sub\""
   else
-    echo "FAIL git-cliff reads \"${line%% | *}\" otherwise: want \"${line#* | }\", git-cliff read:"
-    grep -F -- "${line%% | *} | " <<< "$read_lines" | sed 's/^/     /'
+    IFS=$'\x1f' read -r csc csub <<< "${read_as[$t]}"
+    echo "FAIL git-cliff reads \"$t\" otherwise: scope \"$csc\", subject \"$csub\"; the check: scope \"$sc\", subject \"$sub\""
     failed=1
   fi
 done
