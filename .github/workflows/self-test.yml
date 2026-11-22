@@ -196,6 +196,26 @@ jobs:
           persist-credentials: false
       - run: bash actions/artifact/artifact.test.sh
 
+  pr-title:
+    # The PR title check of pull-request.yml (step `title`), its inputs as the
+    # workflow has them, run through the action it pins, title by title: the
+    # scope ends at the first parenthesis, so a subject containing
+    # "fix(deps): " passes; no work item, a non-issue, empty or doubled scope
+    # fails; labelled dependency and release PRs are let through. Each title
+    # that passes is read by git-cliff as cut-release runs it, to the same
+    # scope and subject. Cases and known limits in pull-request.title.test.sh.
+    name: "Accept: the PR title check reads the scope as git-cliff does"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash .github/workflows/pull-request.title.test.sh
+
   ship:
     # Ship as a service calls it, on the fixture: `ship / Build` (the `test`
     # stage, the image pushed as :<sha>) → `ship / Accept` (Trivy over the
