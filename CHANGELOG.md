@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.2.3](https://github.com/kindorg-hq/ci/compare/v4.2.2...v4.2.3) (2026-11-22)
+
+
+### Bug Fixes
+
+* **#91:** self-test is stable under parallel pull requests ([#92](https://github.com/kindorg-hq/ci/issues/92)) ([385e2cc](https://github.com/kindorg-hq/ci/commit/385e2cc7170a0745008a6e54425ac712be8e9854))
+* **#97:** the title check reads the scope up to the first ")" ([#98](https://github.com/kindorg-hq/ci/issues/98)) ([55bffa8](https://github.com/kindorg-hq/ci/commit/55bffa8f7f5a43a9a6a08fd6fdf5b37f3c603b0a))
+
 ## [4.2.2](https://github.com/kindorg-hq/ci/compare/v4.2.1...v4.2.2) (2026-10-03)
 
 
